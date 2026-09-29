@@ -62,6 +62,15 @@ worker:
 
 postgres:
   enabled: true
+  # P2-08 (2026-09-29): the network login policy — see backend-dev.yaml for the full note.
+  # `restricted` = only `vcap_app` and `vcap_people` may log in over TCP; every other
+  # network login, the bootstrap superuser's included, is rejected. `local` stays trusted
+  # so `kubectl exec … psql` keeps working.
+  #
+  # The application was moved onto `vcap_app` first and observed running there before this
+  # landed — the reverse order would have cut it off.
+  pgHba:
+    mode: "restricted"
   resources:
     requests:
       cpu: 25m
