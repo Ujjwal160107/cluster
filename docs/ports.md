@@ -8,7 +8,7 @@ and cross-checks it against `k8s/` manifests, not this file's prose).
 Before adding a new port: read [`runbooks/add-port.md`](runbooks/add-port.md).
 
 `status`: **live** = reachable today · **target** = planned, not yet implemented · **remove** =
-reachable today, scheduled for removal · **closed** = was reachable, now serves nothing · **not-open**
+reachable today, scheduled for removal · **closed** = was reachable, now serves nothing · **open**
 = target state, deliberately not yet listening. §4 of the architecture review (kept private, not
 published) holds the full current-state audit this table is derived from (verified 2026-09-27 via `ss
 -Hltnp`/`ss -Hlunp` on the node + an external TCP probe).
@@ -22,8 +22,8 @@ published) holds the full current-state audit this table is derived from (verifi
 | 443 | tcp | traefik (websecure) | public | live | Cloudflare-proxied, all `*.upayan.dev` hosts |
 | 5432 | tcp | vcap-dev postgres (legacy path) | public | closed | **closed, never reopens** — the unmanaged NodePort duplicate was deleted 2026-09-29 and the tenant chart's same-namespace NetworkPolicy blocks the Traefik path, so nothing answers. Superseded by 15432 |
 | 5433 | tcp | vcap-staging postgres (legacy path) | public | closed | same as 5432; superseded by 15433 |
-| 15432 | tcp | vcap-dev postgres (target path) | public | not-open | **NOT OPEN YET** — OD-1's target port. Nothing listens and no firewall rule exists; opens only once TLS, per-person non-superuser roles, a network-superuser-locking `pg_hba`, the additive ingress NetworkPolicy and auth-failure alerting all exist |
-| 15433 | tcp | vcap-staging postgres (target path) | public | not-open | same contract as 15432, and gated on the tenant accepting the chart-side change (OD-16); never opens before 15432 has been exercised |
+| 15432 | tcp | vcap-dev postgres (OD-1's port) | public | **open** | TLS terminates at Traefik with the private-CA leaf, `pg_hba` refuses the bootstrap superuser over TCP, per-person roles are read-only, and an additive NetworkPolicy admits only Traefik. **Verified end-to-end from a client on 2026-09-29** (`sslmode=verify-full`, read allowed, write refused, superuser refused) |
+| 15433 | tcp | vcap-staging postgres (OD-1's port) | public | **open** | same contract as 15432; opened **after** 15432 had been exercised, as the plan required, and verified end-to-end the same way |
 | 30532 | tcp | vcap-staging postgres (dup NodePort) | public | removed | unmanaged, `kubectl apply`-created; deleted 2026-09-29 |
 | 30533 | tcp | vcap-dev postgres (dup NodePort) | public | removed | unmanaged, `kubectl apply`-created; deleted 2026-09-29 |
 | 30843 | tcp | traefik LB NodePort (web) | public | remove | kube-proxy auto-allocated, duplicates 80 |
@@ -55,8 +55,8 @@ address — worth knowing before NET-003 is treated as defence in depth rather t
 |---|---|---|---|---|
 | 80 | tcp | traefik (web) | public | from Cloudflare IP ranges only (Hetzner firewall) |
 | 443 | tcp | traefik (websecure) | public | from Cloudflare IP ranges only |
-| 15432 | tcp | vcap-dev postgres | public (**not open yet**) | the target public path — TLS termination at Traefik, per-person non-superuser roles, real client IP visible to `pg_hba`. 5432 is closed and does not come back |
-| 15433 | tcp | vcap-staging postgres | public (**not open yet**) | same hardening, holds real (class A) student data; opens only after 15432 |
+| 15432 | tcp | vcap-dev postgres | public (**open**) | the public path — TLS termination at Traefik, per-person non-superuser roles. 5432 is closed and does not come back |
+| 15433 | tcp | vcap-staging postgres | public (**open**) | same hardening; holds real (class A) student data, and was opened only after 15432 |
 | 41641 | udp | tailscaled | public | unchanged |
 | 22 | tcp | sshd | tailnet | no public rule; admin plane is tailnet-only |
 | 6443 | tcp | k3s apiserver | tailnet | no public rule |

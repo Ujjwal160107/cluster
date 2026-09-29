@@ -97,8 +97,8 @@
   k8s_service: vcap-backend-dev-postgres:5432, behind Traefik with TLS termination
   namespace: vcap-dev
   owner: upayan (app owner), vcap devs (consumers)
-  scope: public — **NOT OPEN YET**
-  status: not-open
+  scope: public — **open** (verified 2026-09-29)
+  status: open
   reason: "Owner decision OD-1: the public path is 15432, not 5432 — a non-default port is defence against mass scanning, not a security control on its own. It stays closed until ALL of: TLS at Traefik with a private-CA leaf (sslmode=verify-ca), a non-superuser vcap_app role, pg_hba that rejects network superuser logins, per-person non-superuser roles, the cluster-owned additive ingress NetworkPolicy, and auth-failure alerting — AND the VCAP team accepts the chart-side pg_hba/role change (OD-16). Today both instances are ssl=off and the only login role is a superuser."
   firewall_rule: "target (P7-N7): tcp 15432 from 0.0.0.0/0 and ::/0 — NO such rule exists today"
   ingress: "Traefik vcap-pg-dev entrypoint (P7-N7) -> IngressRouteTCP with tls.secretName"
@@ -129,8 +129,8 @@
   k8s_service: vcap-backend-staging-postgres:5432, behind Traefik with TLS termination
   namespace: vcap-staging
   owner: upayan (app owner), vcap devs (consumers)
-  scope: public — **NOT OPEN YET**
-  status: not-open
+  scope: public — **open** (verified 2026-09-29)
+  status: open
   reason: "Same contract as 15432 (OD-1), and additionally gated on the VCAP team's acceptance of the pg_hba/non-superuser change (OD-16) because this instance holds class A student data. Nothing about it may open before the 15432 path has been exercised first."
   firewall_rule: "target (P7-N7): tcp 15433 from 0.0.0.0/0 and ::/0 — NO such rule exists today"
   ingress: "Traefik vcap-pg-staging entrypoint (P7-N7) -> IngressRouteTCP with tls.secretName"

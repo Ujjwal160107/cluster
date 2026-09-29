@@ -110,7 +110,7 @@ the leaked one.
   lives in `k8s/apps/vcap/secrets/<env>/secrets.sops.yaml` (`backend-env`). Rotating it properly is
   entangled with the per-person non-superuser roles the tenant's chart must first gain (OD-16) — see
   [`../secrets.md`](../secrets.md). The legacy public path is **closed**: 5432/5433 answer nothing and
-  never reopen, and the target path (15432/15433) is **not open yet** — it stays shut until TLS,
+  never reopen, and the target path (15432/15433) is **open** (verified 2026-09-29) — it opened once TLS,
   per-person roles, a network-superuser-locking `pg_hba` and auth-failure alerting exist. Editing the
   Secret does not roll the pods; follow it with a `kubectl rollout restart` (see the restart rule
   above).

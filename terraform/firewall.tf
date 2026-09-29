@@ -90,6 +90,15 @@ resource "hcloud_firewall" "vps" {
     port       = "15432"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
+  # 15433 opened 2026-09-29 after 15432 had been exercised by a real client through the edge
+  # (TLS verified against the CA, the per-person role reading and refused a write, the superuser
+  # refused) -- the plan's ordering, and staging holds the real data.
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "15433"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
   rule {
     direction  = "in"
     protocol   = "udp"

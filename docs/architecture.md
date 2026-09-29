@@ -41,7 +41,7 @@ table, and [`ports.md`](ports.md) for the network surface.
                                    │ 80/443 from CF IP ranges only
 ┌──────────────── Hetzner Cloud Firewall "vps" (Terraform) ─────────────────┐
 │ in: tcp 80,443 ← Cloudflare ranges | udp 41641 ← any (Tailscale) | icmp   │
-│ tcp 15432,15433 ← any (vcap Postgres, TLS; not open yet) | no tcp 22 v4+v6│
+│ tcp 15432,15433 ← any (vcap Postgres, TLS) | tcp 22 ← any (N5 restricts)  │
 └───────────────────────────────────────────────────────────────────────────┘
   vps (cx33) — Ubuntu 24.04 — Ansible-managed
    ├─ /            root disk: OS, k3s, images, Prometheus/Loki TSDB, logs, caches

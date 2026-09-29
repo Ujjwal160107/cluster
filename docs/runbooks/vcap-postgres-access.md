@@ -3,21 +3,16 @@
 How the tenant's developers reach the VCAP dev and staging Postgres instances — and, plainly, that
 they **cannot yet**.
 
-> ## ⚠️ These ports are not open yet
->
-> **The target is `15432` (dev) and `15433` (staging), TLS-only. Neither port is open today, and
-> `5432`/`5433` are not either — they are closed, or on their way to being closed.** Nothing below is
-> a description of the live cluster; it is the contract that will apply once it is.
->
-> The ports open only after **both**:
-> 1. **P2-08's controls exist** — TLS required, a non-superuser application role, per-person
->    non-superuser roles, the superuser confined to the pod network, and auth-failure monitoring;
-> 2. **the VCAP team has approved** the chart change and the application's move off the superuser
->    (OD-16).
->
-> Until then, `runbooks/recover-*` and `docs/disaster-recovery.md` are the operative documents and the
-> databases are not reachable from an ordinary host. ADR [`0009`](../adr/0009-vcap-postgres-public-ports.md)
-> records the decision and its current status.
+## Status: open since 2026-09-29
+
+**`15432` (dev) and `15433` (staging) are live, TLS-only, and verified end-to-end from a client** —
+the contract below is what is enforced, not an aspiration. `5432`/`5433` are closed **permanently**:
+their firewall rules were removed, so nothing can serve them even by accident.
+
+Three things to know before the first connection: the application runs as a non-superuser role; the
+**person** roles are **read-only** (SELECT and nothing else); and the bootstrap superuser is refused
+over TCP entirely — operator work happens through `kubectl exec … psql`. ADR
+[`0009`](../adr/0009-vcap-postgres-public-ports.md) records the decision and its status.
 
 ## The contract (once open)
 

@@ -56,7 +56,7 @@ can be published without carrying personal data. Delete the private copy once it
 | Role | Access |
 |---|---|
 | Owner / admin | Tailnet (SSH, kubectl), Cloudflare Access allow-list, only tailnet identity in the target design |
-| vcap dev | Public Postgres DB credentials only (target 15432/15433 with TLS + per-person roles; **not open yet**, and 5432/5433 never reopen) — **no tailnet access** |
+| vcap dev | Public Postgres DB credentials only (**open** on 15432/15433 with TLS + per-person roles; 5432/5433 never reopen) — **no tailnet access** |
 | vcap dev | Same as above — DB credentials only, no tailnet |
 
 ## Related

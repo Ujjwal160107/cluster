@@ -1,8 +1,12 @@
 # 0009. The VCAP Postgres instances stay publicly reachable, on moved non-default ports
 
-- **Status:** Accepted, partially implemented — **5432/5433 are closed and 15432/15433 are not open
-  yet** (measured 2026-09-29: nothing answers on either pair), and the compensating controls are
-  tenant-chart work that waits on the tenant agreement (OD-16).
+- **Status:** **Implemented 2026-09-29.** 5432/5433 are closed permanently (their firewall rules
+  were removed, so nothing can serve them even by accident) and **15432/15433 are open**, with the
+  compensating controls this decision called for: TLS at Traefik with a private-CA leaf, a
+  non-superuser application role that the app actually uses, a `pg_hba.conf` that refuses the
+  bootstrap superuser over TCP, per-person read-only roles, an additive ingress NetworkPolicy, and
+  auth-failure alerting. 15433 opened only after 15432 had been exercised by a real client. The
+  tenant accepted the chart-side change (OD-16).
 - **Date:** 2026-09-28 (decided); recorded 2026-09-29.
 
 ## Context
@@ -28,9 +32,9 @@ The live state, measured 2026-09-29 rather than inherited from the plan:
   `vcap-staging` namespaces — so the ports were bound cluster-wide rather than by the database pods;
 - **nothing fronts them.** The Hetzner firewall still permits 5432/5433 from `0.0.0.0/0`, and the
   traffic never passed through Cloudflare, so Cloudflare's WAF and Access are not in this path at
-  all. The target path (15432/15433) is **not open yet**: no firewall rule exists for it, deliberately.
-  The Traefik entrypoints and the TLS route were built on 2026-09-29 (N7) and are inert from outside —
-  the ports are unreachable because the firewall has no rule, not because nothing listens.
+  all. The target path (15432/15433) is **open** as of 2026-09-29 (N7): the Traefik entrypoints and
+  the TLS route were built first, inert from outside because the firewall had no rule, and the rule
+  was added last — 15432 before 15433, after each environment's controls were verified.
 
 ## Decision
 

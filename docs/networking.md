@@ -83,7 +83,7 @@ Key decisions (owner-confirmed, OD-1):
 - **vcap Postgres stays public on moved non-default ports — 15432 (dev), 15433 (staging)** — any IP
   may connect, but only once the connection is hardened with TLS (private CA), per-person
   non-superuser roles, a `pg_hba` that refuses network superuser logins, and auth-failure alerting.
-  **5432/5433 are closed permanently and are not the target; 15432/15433 are not open yet** (neither
+  **5432/5433 are closed permanently and are not the target; 15432/15433 are open and verified** (both
   the firewall rule nor the Traefik entrypoint exists). See [`certificates.md`](certificates.md) for
   the TLS side.
 - **Admin plane (SSH, k8s API, kubelet) is Tailscale-only** — no public SSH, no IP allowlist.
