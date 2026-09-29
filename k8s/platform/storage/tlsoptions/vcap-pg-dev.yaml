@@ -17,7 +17,11 @@ apiVersion: traefik.io/v1alpha1
 kind: TLSOption
 metadata:
   name: vcap-pg
-  namespace: vcap-staging
+  namespace: vcap-dev
+  annotations:
+    # Like the edge routers: removing this file from git must not silently break the edge's TLS
+    # handshake for modern clients — that is a reviewed change, not a prune sweep.
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   alpnProtocols:
     - postgresql

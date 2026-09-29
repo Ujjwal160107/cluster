@@ -72,6 +72,11 @@ spec:
     # The cluster-owned public Postgres edge (k8s/apps/vcap/edge/<env>).
     # IngressRouteTCP only: Middleware, IngressRoute, TLSOption, ServersTransport
     # and MiddlewareTCP stay denied — the tenant has no reason to touch routing.
+    #
+    # A `TLSOption` *is* needed for the edge (it is what accepts the ALPN name libpq 17+ offers),
+    # but it is **cluster-owned and lives in `k8s/platform/storage/tlsoptions/`**, applied by the
+    # `storage` Application into these namespaces. The tenant references it by name and cannot
+    # create or change it — which is the same boundary this list enforces, kept intact.
     - group: traefik.io
       kind: IngressRouteTCP
   orphanedResources:
