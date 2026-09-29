@@ -10,6 +10,34 @@
 # a network-superuser-locking pg_hba, auth-failure alerting) does not exist either. Leave 5432/5433
 # closed; add 15432/15433 only together with that hardening.
 
+# N4 (P7): restrict 80/443 to Cloudflare's edge. Fetched, never hand-copied — a static list rots
+# silently, and a wrong range list here is a total ingress outage (Cloudflare can reach nothing, every
+# host 5xx). The provider data source was confirmed present in the pinned version
+# (`terraform providers schema`: `cloudflare_ip_ranges` exposes `ipv4_cidr_blocks`, `ipv6_cidr_blocks`,
+# `china_ipv4_cidr_blocks`, `china_ipv6_cidr_blocks`).
+#
+# The **China-network ranges are included deliberately.** Cloudflare's China network reaches origins
+# from those, so a rule built from the main lists alone silently drops that traffic — and a silently
+# dropped visitor is indistinguishable from a broken site. Including them cannot break anyone;
+# excluding them can. (The previous version of this comment asked for exactly this decision to be made
+# before the apply rather than discovered after it.)
+data "cloudflare_ip_ranges" "cf" {}
+
+locals {
+  # Gated, so that the currently applied firewall is **provably unchanged** until an operator opts in:
+  # with the flag off this is byte-identical to the `["0.0.0.0/0", "::/0"]` it replaces, and
+  # `terraform plan` reports no changes (measured — see the changelog entry).
+  #
+  # Only 80 and 443 are affected. 22 and 6443 are NOT narrowed here: that is N5, and it depends on a
+  # working tailnet (N2) rather than on Cloudflare.
+  http_https_source_ips = var.cloudflare_only_ingress ? concat(
+    data.cloudflare_ip_ranges.cf.ipv4_cidr_blocks,
+    data.cloudflare_ip_ranges.cf.ipv6_cidr_blocks,
+    data.cloudflare_ip_ranges.cf.china_ipv4_cidr_blocks,
+    data.cloudflare_ip_ranges.cf.china_ipv6_cidr_blocks,
+  ) : ["0.0.0.0/0", "::/0"]
+}
+
 resource "hcloud_firewall" "vps" {
   name = "vps"
 
@@ -24,13 +52,13 @@ resource "hcloud_firewall" "vps" {
     direction  = "in"
     protocol   = "tcp"
     port       = "80"
-    source_ips = ["0.0.0.0/0", "::/0"]
+    source_ips = local.http_https_source_ips
   }
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "443"
-    source_ips = ["0.0.0.0/0", "::/0"]
+    source_ips = local.http_https_source_ips
   }
   rule {
     direction  = "in"

@@ -50,3 +50,9 @@ variable "cloudflare_zone_name" {
   type        = string
   default     = "upayan.dev"
 }
+
+variable "cloudflare_only_ingress" {
+  description = "N4: restrict the 80/443 firewall rules to Cloudflare's published ranges. Off by default, and off means the applied firewall is unchanged."
+  type        = bool
+  default     = false
+}
