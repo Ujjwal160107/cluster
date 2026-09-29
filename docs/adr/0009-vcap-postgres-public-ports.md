@@ -28,8 +28,9 @@ The live state, measured 2026-09-29 rather than inherited from the plan:
   `vcap-staging` namespaces — so the ports were bound cluster-wide rather than by the database pods;
 - **nothing fronts them.** The Hetzner firewall still permits 5432/5433 from `0.0.0.0/0`, and the
   traffic never passed through Cloudflare, so Cloudflare's WAF and Access are not in this path at
-  all. The target path (15432/15433) is **not open yet**: no firewall rule and no Traefik entrypoint
-  exists for it, deliberately.
+  all. The target path (15432/15433) is **not open yet**: no firewall rule exists for it, deliberately.
+  The Traefik entrypoints and the TLS route were built on 2026-09-29 (N7) and are inert from outside —
+  the ports are unreachable because the firewall has no rule, not because nothing listens.
 
 ## Decision
 
@@ -86,7 +87,8 @@ same split in its own words.
   rewritten `NET-001`, and the relaxed `SR-4`.
 - The live state: nothing answers on `5432`/`5433` or on `15432`/`15433` on the node's public address
   (TCP connect, 2026-09-29). 5432/5433 stopped serving when the NodePort duplicates were deleted and
-  the tenant NetworkPolicy block landed; 15432/15433 never listened.
+  the tenant NetworkPolicy block landed; 15432/15433 listen inside the cluster since N7 but the
+  firewall has no rule for them, so nothing outside can complete a connection.
 - The mechanism: `kubectl get ingressroutetcp -A` shows the two legacy routes; `kubectl get svc -A`
   no longer lists the deleted NodePort duplicates.
 - The firewall: `cluster/terraform/firewall.tf` still allows 5432/5433 from `0.0.0.0/0`, although

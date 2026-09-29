@@ -78,7 +78,7 @@ generator; "Explicit" rows are `k8s/argocd/applications/apps/<app>.yaml`.
 | `hetzner-csi` | `kube-system` | ⚠️ OutOfSync/Healthy (known) |
 | `keda` | `keda` | ScaledObjects for vcap |
 | `monitoring` | `monitoring` | Prometheus + Grafana + Loki + Promtail |
-| `traefik-config` | `traefik` | patches k3s's built-in `kube-system/traefik` via `HelmChartConfig` (postgres-dev/postgres-staging TCP entrypoints, used by `vcap-postgres-dev`/`vcap-postgres-staging` `IngressRouteTCP`) |
+| `traefik-config` | `traefik` | patches k3s's built-in `kube-system/traefik` via `HelmChartConfig` (vcap-pg-dev/vcap-pg-staging TCP entrypoints on 15432/15433 — the old postgres-dev/postgres-staging ones were removed 2026-09-29 — used by `vcap-postgres-dev`/`vcap-postgres-staging` `IngressRouteTCP`, which carry TLS) |
 
 ### VCAP
 
