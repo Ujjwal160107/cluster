@@ -131,8 +131,12 @@ its own chart (`upayanmazumder/rankstack#94`) because that chart owns the namesp
 namespaces instead of `namespace: "*"`, and `platform` lists the 11 cluster-scoped kinds its apps
 manage instead of `*`. Adding an app therefore also means adding its namespace to the `apps`
 project — a deliberate review gate, and a loud failure (`namespace <x> is not permitted in project
-<y>`) rather than a silent mis-sync. The built-in `default` project, where the `root` app runs, is
-still permissive and is a known remaining gap (moving `root` is self-referential).
+<y>`) rather than a silent mis-sync. The `root` app has its own project too — `bootstrap`, scoped to
+this repository, the `argocd` namespace and the three `argoproj.io` kinds under `k8s/argocd/` —
+replacing the built-in `default`, which permits `'*'` everywhere and, being shared, made the other
+projects' whitelists bypassable. The remaining step is mechanical rather than a design question:
+`k8s/bootstrap/root-app.yaml` is not reconciled by ArgoCD, so the live `root` moves only when it is
+re-applied by hand, and `AppProject/default` can be locked down only after that.
 
 **Network policies** are covered in [`networking.md`](networking.md#networkpolicy-posture-s11--implemented-2026-09-28).
 **Upgrade/pinning policy** is in [`upgrade-policy.md`](upgrade-policy.md).
