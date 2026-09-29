@@ -83,8 +83,11 @@ Everything in the target diagram above except the items listed at the end of thi
 the architecture review (private, not published) §14/§17.
 
 - **Terraform** (S2): server/IPs/SSH key/firewall/R2 buckets/Cloudflare zone settings imported and
-  managed — configuration in the `cluster` checkout, `cluster/terraform/` (`terraform/` here is a
-  pointer; see [`terraform/README.md`](../terraform/README.md)).
+  managed — the configuration is `terraform/` **in this repository** (see
+  [`terraform/README.md`](../terraform/README.md)). This line used to call it "a pointer" to a
+  separate `cluster` checkout, which was true of the private `vps` tree this was exported from and
+  has not been true of `cluster` itself; `scripts/tf.sh` enforces the same thing by refusing to run
+  from any other origin.
 - **Ansible** (S3): host baseline, k3s config, `vps-data` mount, and the backup role applied from
   git; `admin_user` is the one role still unapplied (needs the owner's public key).
 - **`vps-data` volume** (S8): 20 GB Hetzner volume mounted at `/srv/data`, and the three class-A
