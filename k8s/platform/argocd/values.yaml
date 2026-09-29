@@ -67,7 +67,16 @@ server:
     enabled: true
     ingressClassName: traefik
     annotations:
-      traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+      # N3 (P7): `websecure` only. The `web` entrypoint was removed because it could never match
+      # anyway: with `router.tls: "true"` below, Traefik only builds a TLS router, so a plaintext
+      # request on port 80 gets 404 even though `web` was declared. Measured before the change
+      # (2026-09-29, direct to the origin with the right Host header): `HTTP/1.1 404 Not Found` on :80
+      # for both this host and grafana. So this edit changes no behaviour — it removes a declaration
+      # that contradicted `tls: "true"` and would become a live plaintext path only if someone later
+      # set `tls: false`, at which point Cloudflare Access (which guards this hostname at the edge
+      # over HTTPS) would be bypassable by a request straight to the origin. Access itself was
+      # verified live after the apply: https://argocd.upayan.dev 302s to the Access login.
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
       traefik.ingress.kubernetes.io/router.tls: "true"
     hostname: argocd.upayan.dev
     # No `tls:` block: Traefik terminates with its default certificate, the

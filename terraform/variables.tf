@@ -39,6 +39,18 @@ variable "enable_cloudflare_access" {
   # changelog entry for 2026-09-29 naming that repeat.
 }
 
+variable "cloudflare_access_api_token" {
+  description = "N3: the Cloudflare API token used by the Access resources only (provider alias `cloudflare.access`). Supplied as `TF_VAR_cloudflare_access_api_token` from the SOPS secrets file; never in a committed file."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  # Empty by default so `terraform plan` on a tree without the N3 token stays inert (with
+  # `enable_cloudflare_access = false` no Access resource is planned, so the empty token is never
+  # used). The pairing "access enabled but no token" is refused by a `precondition` in `access.tf`,
+  # not here — a variable validation cannot see the other variable (see the note above).
+}
+
 variable "emergency_ssh_cidr" {
   description = "Temporary /32 CIDR to allow tcp/22 through the Hetzner firewall for break-glass recovery when Tailscale is unreachable (S6 target state). Empty = no rule. Remove after use — this is a manual, confirmed, temporary override, never left set."
   type        = string
@@ -52,7 +64,19 @@ variable "cloudflare_zone_name" {
 }
 
 variable "cloudflare_only_ingress" {
-  description = "N4: restrict the 80/443 firewall rules to Cloudflare's published ranges. Off by default, and off means the applied firewall is unchanged."
+  description = "N4: restrict the 80/443 firewall rules to Cloudflare's published ranges. Now ON (N4 landed 2026-09-29); set back to false to revert in one apply."
   type        = bool
-  default     = false
+  default     = true
+
+  # Flipped to true when N4 landed (2026-09-29), the same day Cloudflare Access did.
+  #
+  # Why N4 was urgent rather than merely ordered after N3: measured, with Access live, a request to the
+  # **origin** over 443 carrying the right Host header reached ArgoCD directly — `HTTP/2 200` from
+  # `curl -sk --resolve argocd.upayan.dev:443:138.201.157.147` — i.e. the Access policy was bypassable
+  # by anyone who resolves the origin IP, which the public DNS record makes trivial. Access is enforced
+  # at Cloudflare's edge, so it only means anything once the edge is the *only* way in. That is exactly
+  # what this flag does, and the 25 proxied hostnames are unaffected because Cloudflare still reaches
+  # the origin from its own ranges.
+  #
+  # Kept as a variable rather than folded into the rules so the revert is one variable and one apply.
 }

@@ -4,7 +4,13 @@ metadata:
   name: grafana-ingress
   namespace: monitoring
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    # N3 (P7): `websecure` only. `web` was declared but could never match — `router.tls: "true"` makes
+    # Traefik build only a TLS router, so a plaintext request on :80 gets 404. Measured before this
+    # change (direct to the origin, correct Host header, 2026-09-29): `HTTP/1.1 404 Not Found`. The edit
+    # is therefore behaviour-neutral today and removes a declaration that contradicts `tls: "true"`.
+    # It matters because grafana.upayan.dev is now behind Cloudflare Access (verified: 302 to the Access
+    # login), and Access is only meaningful while nothing else can serve the same hostname.
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   ingressClassName: traefik

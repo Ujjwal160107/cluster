@@ -16,17 +16,26 @@
 # (`terraform providers schema`: `cloudflare_ip_ranges` exposes `ipv4_cidr_blocks`, `ipv6_cidr_blocks`,
 # `china_ipv4_cidr_blocks`, `china_ipv6_cidr_blocks`).
 #
-# The **China-network ranges are included deliberately.** Cloudflare's China network reaches origins
-# from those, so a rule built from the main lists alone silently drops that traffic — and a silently
-# dropped visitor is indistinguishable from a broken site. Including them cannot break anyone;
-# excluding them can. (The previous version of this comment asked for exactly this decision to be made
-# before the apply rather than discovered after it.)
+# **Hetzner caps a rule's `source_ips` at 100 CIDRs, and all four lists do not fit.** Measured
+# 2026-09-29 by bisecting an unattached throwaway firewall (nothing touched the live one):
+# `ipv4(15) + ipv6(7) + china_ipv4(46) + china_ipv6(44) = 112` → the API answers
+# `invalid input … source_ips => [value required to be smaller]`; 100 entries are accepted and 101 are
+# not. (The first attempt to apply this rule failed exactly that way, which is how the cap was found;
+# the failed apply changed nothing, confirmed by re-reading the firewall.)
+#
+# So **`china_ipv6_cidr_blocks` is excluded**, which loses nothing real: Cloudflare's own published
+# `https://www.cloudflare.com/ips-v6-china` now returns an **empty** list, so the provider's 44
+# china-IPv6 entries are stale ranges Cloudflare no longer advertises. `china_ipv4_cidr_blocks` **is**
+# still published (46 live entries) and stays, because Cloudflare's China network reaches origins from
+# those and a silently dropped visitor is indistinguishable from a broken site. The result is 68
+# entries per rule — under the cap with headroom, and every currently-advertised Cloudflare range
+# present. If Cloudflare ever republishes china-IPv6, this needs a different shape (a second rule or
+# N6's nftables set, which has no such cap), not a longer list.
 data "cloudflare_ip_ranges" "cf" {}
 
 locals {
-  # Gated, so that the currently applied firewall is **provably unchanged** until an operator opts in:
-  # with the flag off this is byte-identical to the `["0.0.0.0/0", "::/0"]` it replaces, and
-  # `terraform plan` reports no changes (measured — see the changelog entry).
+  # Gated, so that the applied firewall is provably the intended one: with the flag off this is
+  # byte-identical to the `["0.0.0.0/0", "::/0"]` it replaces, and `terraform plan` reports no changes.
   #
   # Only 80 and 443 are affected. 22 and 6443 are NOT narrowed here: that is N5, and it depends on a
   # working tailnet (N2) rather than on Cloudflare.
@@ -34,7 +43,8 @@ locals {
     data.cloudflare_ip_ranges.cf.ipv4_cidr_blocks,
     data.cloudflare_ip_ranges.cf.ipv6_cidr_blocks,
     data.cloudflare_ip_ranges.cf.china_ipv4_cidr_blocks,
-    data.cloudflare_ip_ranges.cf.china_ipv6_cidr_blocks,
+    # china_ipv6_cidr_blocks deliberately omitted: stale, and it would push the rule past Hetzner's
+    # 100-CIDR cap. See the header comment.
   ) : ["0.0.0.0/0", "::/0"]
 }
 

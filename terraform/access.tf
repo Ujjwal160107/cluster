@@ -67,6 +67,12 @@ locals {
 resource "cloudflare_zero_trust_access_application" "admin_ui" {
   for_each = local.access_admin_uis
 
+  # The narrower, Access-only token (`TF_VAR_cloudflare_access_api_token`). The default provider's
+  # token cannot write Access at all — measured: even a read is refused with `10000 Authentication
+  # error` — and this token cannot touch R2, DNS or zone settings. Each provider is used where it has
+  # authority, and neither can act outside its scope (`providers.tf`).
+  provider = cloudflare.access
+
   zone_id = data.cloudflare_zone.upayan_dev.id
   name    = each.key
   domain  = each.value
@@ -92,11 +98,25 @@ resource "cloudflare_zero_trust_access_application" "admin_ui" {
       condition     = length(var.access_allowed_emails) > 0
       error_message = "enable_cloudflare_access = true requires access_allowed_emails to name at least one identity — an Access policy with an empty allow-list would lock every user, including you, out of the ArgoCD and Grafana UIs."
     }
+
+    # N3's second guard: the Access provider alias needs its own token, and an empty one produces
+    # "10000 Authentication error" from Cloudflare at apply time — an error that names the API, not the
+    # missing configuration. Say it here instead, where the fix is obvious. (Measured 2026-09-29: the
+    # default provider's token fails this call even though it is valid and active, because it carries
+    # no Access permission.)
+    precondition {
+      condition     = length(var.cloudflare_access_api_token) > 0
+      error_message = "enable_cloudflare_access = true requires cloudflare_access_api_token to be set (TF_VAR_cloudflare_access_api_token in the SOPS secrets file). The default provider's token has no Access permission — Cloudflare answers 'Authentication error (10000)' — so the Access resources are wired to the `cloudflare.access` alias and need a token that can write them."
+    }
   }
 }
 
 resource "cloudflare_zero_trust_access_policy" "admin_ui_allow" {
   for_each = local.access_admin_uis
+
+  # Same Access-only token as the application it attaches to; a policy written with the broad token
+  # would fail the same way (the policy API is part of the Access permission group).
+  provider = cloudflare.access
 
   zone_id        = data.cloudflare_zone.upayan_dev.id
   application_id = cloudflare_zero_trust_access_application.admin_ui[each.key].id
