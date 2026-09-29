@@ -71,3 +71,28 @@ the local `terraform.tfstate` as authoritative (it stays gitignored either way).
 - `../docs/certificates.md` — the `min_tls_version` finding and TLS design
 - `../docs/plans/2026-09-27-architecture-review.md` §17 S2 — the full stage brief this directory implements
 - `../changelog/2026-09.md` — full apply history and the recovered state-loss mistake
+
+## The Terraform version, and why it is pinned twice
+
+CI pins Terraform **exactly** (`.github/workflows/validate.yml` → `terraform_version: "1.7.5"`), and
+`terraform/.terraform-version` carries the same value so a version manager picks it up on a workstation.
+
+**Run `terraform validate` with that version, not whatever `terraform` happens to be on your `PATH`.** The
+difference is not theoretical — it has already cost this repository two red CI runs:
+
+| Commit | Bug | Why the local run said "fine" |
+|---|---|---|
+| `2500dc9` (P3-04) | `variable "enable_rebuild_server"` had a `validation` referencing `var.rebuild_server_tailscale_auth_key` | a `variable` validation may only reference **its own** variable. The workstation's Terraform 1.15 accepts the cross-reference; the pinned 1.7 rejects it at `terraform init` |
+| `1f73356` (N3) | the identical shape, in `variable "enable_cloudflare_access"` | same |
+
+Both were fixed the same way: move the "these two variables must agree" check to a
+`lifecycle.precondition` on the resource the variables configure, which may reference both and is
+evaluated only when that resource is planned.
+
+**The rule this leaves behind:** a local `terraform validate` is evidence for *the version that ran it* and
+for nothing else. If you write a cross-variable check, run it against 1.7.5 before pushing:
+
+```bash
+mkdir -p /tmp/tf-pinned && cp terraform/*.tf terraform/.terraform.lock.hcl /tmp/tf-pinned/
+cd /tmp/tf-pinned && /path/to/terraform-1.7.5 init -backend=false && terraform validate
+```

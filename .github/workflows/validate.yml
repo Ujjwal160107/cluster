@@ -71,7 +71,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~> 1.7"
+          # Pinned EXACTLY, like every other tool in this workflow (CI-007). It was `~> 1.7` — the one
+          # range in the file — and that range is what let a bug through twice: the workstation runs
+          # Terraform 1.15, which accepts a `variable` validation that references a *second* variable,
+          # while 1.7 rejects it with "Invalid reference in variable validation". Both times every local
+          # check passed and this job failed at `init`. See the 2026-09-29 changelog entries for
+          # `2500dc9` (P3-04) and `1f73356` (N3). `terraform/.terraform-version` carries the same value so
+          # a version manager picks the same one up locally.
+          terraform_version: "1.7.5"
       - run: terraform fmt -check -recursive
       - run: terraform init -backend=false
       - run: terraform validate
