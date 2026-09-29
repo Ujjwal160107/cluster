@@ -12,6 +12,13 @@
 # `vitscopesoftwareteam/vcap-staging-frontend/web`) cannot be tracked until an owner
 # supplies a PAT with `read:packages` (or per-package access) — they are unaffected
 # functionally, being digest-pinned and pulled via their own `pull-secret`s.
+# P6-02: image-updater is paused through the cutover.
+# `replicaCount` is the chart's own key (verified against argo/argocd-image-updater 0.14.0).
+# Reason: it writes commits to a git repository, and during the source switch it would be
+# committing into a repository that is no longer the one being reconciled — producing digest
+# pins nobody reads. P6-06 sets this back to 1 and checks the write-back lands in `cluster`.
+replicaCount: 0
+
 config:
   registries:
     - name: ghcr
