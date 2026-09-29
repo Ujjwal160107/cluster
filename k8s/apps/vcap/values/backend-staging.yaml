@@ -71,6 +71,11 @@ postgres:
   # landed — the reverse order would have cut it off.
   pgHba:
     mode: "restricted"
+    # `+vcap_people` is pg_hba's *membership* prefix: without it the rule names a role that no
+    # person logs in as (the group is NOLOGIN), so every per-person role fell through to the final
+    # `reject` — measured: `FATAL: pg_hba.conf rejects connection for host "…", user "upayan"`.
+    # The application role needs no prefix; it logs in as itself.
+    appRoles: ["vcap_app", "+vcap_people"]
   resources:
     requests:
       cpu: 25m
