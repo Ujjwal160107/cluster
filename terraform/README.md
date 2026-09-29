@@ -69,7 +69,9 @@ the local `terraform.tfstate` as authoritative (it stays gitignored either way).
 
 - `../docs/networking.md` — the firewall layers this config implements
 - `../docs/certificates.md` — the `min_tls_version` finding and TLS design
-- `../docs/plans/2026-09-27-architecture-review.md` §17 S2 — the full stage brief this directory implements
+- This directory was written from the private architecture review's S2/S6 stage brief. That document is
+  **not** published (it lives under `docs/plans/`, which the export excludes), so it is described here
+  rather than linked — a link to it would dangle for every reader of the public tree.
 - `../changelog/2026-09.md` — full apply history and the recovered state-loss mistake
 
 ## The Terraform version, and why it is pinned twice

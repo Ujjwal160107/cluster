@@ -1,10 +1,12 @@
-# Phase 1 (this file, until the `vps-tfstate` R2 bucket exists): local backend.
-# Phase 2 (after the first `terraform apply` creates that bucket in cloudflare.tf): switch this
-# block to the commented-out S3-compatible R2 backend below, run `terraform init -migrate-state`,
-# confirm the state file appears in the bucket, then delete the local `terraform.tfstate*` files
-# (they're also excluded via .gitignore — never commit state, it contains resource IDs and,
-# depending on the resource, potentially sensitive attributes).
+# **State lives in R2 (`s3://vps-tfstate/vps/terraform.tfstate`); the historical phase notes below are
+# kept as the record of how it got there.** An earlier version of this header described "Phase 1: local
+# backend" as the *current* state, which stopped being true when `terraform init -migrate-state` ran
+# (TF-001, 2026-09-29) — the live `backend "s3"` block is further down this file, and a reader who
+# believed the header would have tried to migrate state that had already moved. The phase notes are
+# retained because they explain the chicken-and-egg (the configuration creates the bucket it stores
+# its state in) and the "never commit state" rule.
 #
+# Before any of that (Phase 0, historical): a local backend, to be replaced once the bucket existed.
 # terraform {
 #   backend "s3" {
 #     bucket                      = "vps-tfstate"
