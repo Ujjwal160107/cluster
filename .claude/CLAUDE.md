@@ -12,7 +12,9 @@ All cluster state lives in `k8s/`. Push to `main`; ArgoCD reconciles automatical
    `prune=true, selfHeal=true`): an edit under `k8s/hetzner-csi/` applies **only** when someone syncs it, so it
    sits `OutOfSync` until then, and `kubectl -n argocd patch app hetzner-csi --type merge -p '{"operation":
    {"sync":{"prune":false}}}'` is the deliberate way to apply one.
-   All persistent cluster config changes go through: edit `k8s/` → commit → `git push origin main`.
+   All persistent cluster config changes go through: edit `k8s/` → commit → land on `main` (since
+   P8-03 that means a pull request, or a branch whose CI has already passed — a direct push to `main`
+   is refused by the required status checks; see Workflow below).
 
 2. **Permitted break-glass kubectl writes:**
    - `kubectl apply -f k8s/bootstrap/root-app.yaml` (root app bootstrap — one-time per cluster)
@@ -51,13 +53,23 @@ All cluster state lives in `k8s/`. Push to `main`; ArgoCD reconciles automatical
 ## Workflow
 
 ```
-edit k8s/ → git commit → git push origin main → ArgoCD reconciles (~3 min, or hard-refresh)
+edit k8s/ → git commit → push a branch → CI runs the 7 checks → land it on main → ArgoCD reconciles (~3 min, or hard-refresh)
 ```
 
-**`git pull` before you push.** `argocd-image-updater` now writes digest pins back to `main` as
+**P8-03: `main` requires the 7 CI checks, so a direct push is refused.** Measured on this repository:
+`git push origin main` with the owner's own token fails with
+`GH013 … Required status check "lint" is expected` — a check cannot pass on a commit that does not
+exist yet, so a direct push to `main` cannot satisfy it. Land changes through a pull request, or push
+a branch, let CI pass, then push that same SHA to `main` (a commit whose checks have already passed is
+accepted). The **only** bypass actor is the `argocd-image-updater` **deploy key** (id 164843318) — a
+distinct identity precisely so that no human push inherits a bypass. Nothing else skips the checks.
+
+**`git pull` before you push.** `argocd-image-updater` writes digest pins back to `main` as
 commits authored by `argocd-image-updater <image-updater@upayan.dev>` (`build: automatic update of
 <app>`, adding `.argocd-source-<app>.yaml`). Expect them, and do not "fix" or revert them — they are
-the intended `git` write-back, and a stale local `main` will simply be rejected on push.
+the intended `git` write-back, they are the one identity allowed to bypass the checks, and a stale
+local `main` will simply be rejected on push. That write-back travels over SSH with the deploy key
+above (`argocd/git-creds-updater`), not the HTTPS PAT, for exactly that reason.
 
 ## Cluster facts
 
