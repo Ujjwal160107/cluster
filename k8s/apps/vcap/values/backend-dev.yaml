@@ -72,6 +72,21 @@ worker:
 
 postgres:
   enabled: true
+  # P2-08 (2026-09-29): the network login policy, installed by the chart as a pg_hba.conf.
+  #
+  # `restricted` = only `vcap_app` and `vcap_people` may log in over TCP, with a password;
+  # every other network login is rejected, **the bootstrap superuser's included**. `local`
+  # (the container socket) stays trusted, which is how operators reach it with
+  # `kubectl exec … psql` — no network hole is needed for that.
+  #
+  # Enabled only after the application moved onto `vcap_app` and had been observed running
+  # there (2 connections, both services ready) — the order matters, because enabling this
+  # while the app still authenticated as the superuser would have cut it off.
+  #
+  # The installed file lives in the data directory, so `off` would NOT revert it; `default`
+  # is the explicit revert state (see the chart's values.yaml).
+  pgHba:
+    mode: "restricted"
   resources:
     requests:
       cpu: 25m
