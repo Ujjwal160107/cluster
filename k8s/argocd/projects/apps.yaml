@@ -13,10 +13,9 @@ spec:
     for the foreseeable future, so the split only added naming and routing
     overhead.
   sourceRepos:
-    - https://github.com/upayanmazumder/vps
-    # P6-01: added so every child can resolve from the new source of truth before the switch.
-    # `vps` stays until P8-02 — that is the rollback window (R-1), and it closes deliberately.
     - https://github.com/upayanmazumder/cluster
+    # kept for the P6 rollback window (R-1); removed at P8-02
+    - https://github.com/upayanmazumder/vps
     - https://github.com/upayanmazumder/rankstack
   # S11: destinations enumerated instead of `namespace: "*"`. Adding an app
   # means adding its namespace here too; a mismatch fails loudly ("namespace X

@@ -124,7 +124,7 @@ for doc in docs:
                 continue
             # Only this repo's files are readable in CI; anything else (VCAP's deploy/ dirs) is
             # skipped by the caller, which reports its skips.
-            if refs.get(ref, "").endswith("upayanmazumder/vps"):
+            if refs.get(ref, "").endswith("upayanmazumder/cluster"):
                 vfs.append(tail)
         shape = "helmrepo" if src.get("chart") else "git"
         print("\t".join([app, chart, repo, rev, path, ",".join(vfs) or "-", shape]))

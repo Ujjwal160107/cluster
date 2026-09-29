@@ -25,13 +25,13 @@ spec:
       helm:
         valueFiles:
           - $values/k8s/apps/vcap/values/frontend-staging.yaml
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       ref: values
     # S11 hardening: the frontend chart has no NetworkPolicy templates, so
     # the web pod's ingress policy lives in this repo and is applied by this
     # third source.
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       path: k8s/apps/vcap/frontend-manifests
   destination:

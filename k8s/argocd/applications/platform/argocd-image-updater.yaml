@@ -14,14 +14,14 @@ spec:
       helm:
         valueFiles:
           - $values/k8s/platform/argocd-image-updater/values.yaml
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       ref: values
     # CLUSTER-004: the credential this app's own values.yaml points at, adopted into git as SOPS — it
     # existed only in the cluster, so a rebuild from git would have produced an image-updater that could
     # not authenticate and simply stopped tracking digests. A separate source rather than reusing the
     # `values` ref above, which is consumed as a file reference and renders no objects.
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       path: k8s/platform/argocd-image-updater
   destination:

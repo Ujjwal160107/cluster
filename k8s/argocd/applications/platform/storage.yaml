@@ -8,7 +8,7 @@ metadata:
 spec:
   project: platform
   source:
-    repoURL: https://github.com/upayanmazumder/vps
+    repoURL: https://github.com/upayanmazumder/cluster
     targetRevision: main
     path: k8s/platform/storage
   destination:

@@ -14,7 +14,7 @@ spec:
       helm:
         valueFiles:
           - $values/k8s/platform/argocd/values.yaml
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       ref: values
     # S11: the ArgoCD component NetworkPolicies were live but untracked
@@ -22,13 +22,13 @@ spec:
     # of truth for the control plane's network policy -- see
     # k8s/platform/argocd/network-policies/manifests.yaml for why the chart's
     # own `global.networkPolicy.create` templates are not used instead.
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       path: k8s/platform/argocd/network-policies
     # S11: argocd-secret (admin password hash + server.secretkey) now lives in
     # git SOPS-encrypted, so it survives an etcd loss. The chart's own creation
     # of it is disabled in ../values.yaml.
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       path: k8s/platform/argocd/secret
   destination:

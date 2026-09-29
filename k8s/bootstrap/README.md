@@ -15,11 +15,11 @@ The two files that start a cluster from nothing. Everything else in `k8s/` is re
    `argo/argo-cd` chart at **7.9.1**; its values are `k8s/platform/argocd/values.yaml`. (After
    bootstrap, the `argocd` Application adopts this release, but it has to exist first.)
 2. **The app-of-apps repo is private.** `root-app.yaml` points at
-   `https://github.com/upayanmazumder/vps`, and ArgoCD needs the repo credentials committed
+   `https://github.com/upayanmazumder/cluster`, and ArgoCD needs the repo credentials committed
    SOPS-encrypted in `k8s/platform/argocd/secret/secrets.sops.yaml`. That file lives *in the repo
    ArgoCD is trying to fetch*, so it must be applied by hand before the root app can sync. Skipping
    this is the known failure mode: every Application reports
-   `ComparisonError: failed to get git client for repo https://github.com/upayanmazumder/vps`.
+   `ComparisonError: failed to get git client for repo https://github.com/upayanmazumder/cluster`.
 3. **ksops needs the age-cluster key.** It is deliberately never in git (the key-placement policy is
    part of the private archive, not the published tree); `bootstrap.sh` reads it from a file
    the operator exports from the password manager and installs it as the `argocd/sops-age` Secret.

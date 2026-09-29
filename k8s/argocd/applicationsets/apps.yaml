@@ -106,11 +106,11 @@ spec:
         argocd-image-updater.argoproj.io/{{.alias0}}.kustomize.image-name: '{{.kustomize0}}'
         argocd-image-updater.argoproj.io/write-back-method: "git:secret:argocd/git-creds"
         argocd-image-updater.argoproj.io/git-branch: main
-        argocd-image-updater.argoproj.io/git-repository: https://github.com/upayanmazumder/vps
+        argocd-image-updater.argoproj.io/git-repository: https://github.com/upayanmazumder/cluster
     spec:
       project: apps
       source:
-        repoURL: https://github.com/upayanmazumder/vps
+        repoURL: https://github.com/upayanmazumder/cluster
         targetRevision: main
         path: k8s/apps/{{.name}}
       destination:

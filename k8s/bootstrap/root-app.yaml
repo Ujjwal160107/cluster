@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/upayanmazumder/vps
+    repoURL: https://github.com/upayanmazumder/cluster
     targetRevision: main
     path: k8s/argocd
     directory:

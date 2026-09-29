@@ -76,7 +76,7 @@ kubectl -n argocd create secret generic sops-age \
 # ---------------------------------------------------------------------------------------------
 # 3. The repo credentials and other ArgoCD Secrets, SOPS-encrypted in the repo ArgoCD cannot yet
 #    fetch. This is the step whose absence shows up as
-#    "ComparisonError: failed to get git client for repo https://github.com/upayanmazumder/vps".
+#    "ComparisonError: failed to get git client for repo https://github.com/upayanmazumder/cluster".
 # ---------------------------------------------------------------------------------------------
 echo "bootstrap: applying the ArgoCD repo credentials (SOPS: $argocd_secrets)"
 SOPS_AGE_KEY_FILE="$AGE_CLUSTER_KEYS_FILE" \

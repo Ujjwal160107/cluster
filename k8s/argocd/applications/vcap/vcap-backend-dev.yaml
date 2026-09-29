@@ -33,7 +33,7 @@ spec:
       helm:
         valueFiles:
           - $values/k8s/apps/vcap/values/backend-dev.yaml
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       ref: values
     # SEC-003: the Secrets the values file used to carry (backend-env, auth-env, pull-secret),
@@ -41,7 +41,7 @@ spec:
     # from a git repository and `kustomize --enable-helm` cannot run a ksops generator alongside it
     # (docs/runbooks/rotate-secrets.md records that blocker). Same Application and the same Secret
     # names as before, so ArgoCD sees the same desired objects: nothing is pruned, no ownership moves.
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       path: k8s/apps/vcap/secrets/dev
     # P1-04: the public Postgres edge, cluster-owned. It had existed only in the
@@ -49,7 +49,7 @@ spec:
     # and nothing reviewed a change to it. Behaviour is unchanged here; the port
     # and TLS change is the gated step P7-N7. Namespaced `IngressRouteTCP` only --
     # the `vcap` project permits that one traefik.io kind and nothing else.
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       path: k8s/apps/vcap/edge/dev
   destination:

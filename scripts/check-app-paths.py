@@ -33,7 +33,7 @@ import sys
 import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-THIS_REPO = "https://github.com/upayanmazumder/vps"
+THIS_REPO = "https://github.com/upayanmazumder/cluster"
 
 # Where Application/ApplicationSet manifests live. `k8s/argocd/` is watched recursively by the root
 # app; bootstrap/ holds the one hand-applied Application.

@@ -14,7 +14,7 @@ spec:
       helm:
         valueFiles:
           - $values/k8s/platform/keda/values.yaml
-    - repoURL: https://github.com/upayanmazumder/vps
+    - repoURL: https://github.com/upayanmazumder/cluster
       targetRevision: main
       ref: values
   destination:
