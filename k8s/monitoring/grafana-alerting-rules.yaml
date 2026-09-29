@@ -1373,10 +1373,19 @@ groups:
   #     (`loki_distributor_bytes_received_total{tenant="fake"} = 522 MB`, 4804 chunks created,
   #     12 020 files under `/loki/chunks`). So Loki accepts writes and reads back nothing, for *any*
   #     selector, at *any* range — which means the VCAP log dashboards are inert too.
-  #   - `vcap-postgres-auth-failures` cannot be exercised for a second reason on top of that:
-  #     15432/15433 are closed and the tenant NetworkPolicy admits same-namespace traffic only, so no
-  #     authentication is attempted at all. It is authored so the coverage exists on the day P7-N7
-  #     opens the port.
+  #   - `vcap-postgres-auth-failures` cannot be exercised for a second reason on top of that, and the
+  #     state moved on 2026-09-29 (N7): the edge now EXISTS — Traefik listens on 15432/15433, the two
+  #     `IngressRouteTCP`s carry TLS, and an additive NetworkPolicy admits Traefik to tcp/5432 on the
+  #     Postgres pods (so "the tenant NetworkPolicy admits same-namespace traffic only" is no longer
+  #     the whole story). What keeps it unexercised is the **firewall**: no rule exists for 15432/15433,
+  #     verified unreachable from an ordinary host, so no external client can attempt authentication.
+  #     An in-cluster or tailnet client could now reach the edge over TLS and fail a login; nothing does.
+  #     It is authored so the coverage exists on the day the firewall rule is added (N7's last step).
+  #
+  # Still missing, and deliberately recorded rather than hand-written here: the plan's P2-08 table also
+  # asks for a **Traefik TCP connection-rate panel**. It does not exist yet — none of the
+  # `dashboard-*.json` files carry a Traefik panel — and it belongs with P2-08, which is blocked on
+  # VCAP's acceptance, not bolted on now merely so a table looks complete.
   #
   # **Do not read a clean alert list as coverage.** Both rules are correctly shaped and neither has
   # observed a single event. Fixing Loki's read path is its own task and is NOT part of this
