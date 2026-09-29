@@ -77,7 +77,7 @@ ansible-playbook site.yml -e k3s_install_missing=true \
 Run it from `ansible/` (that is what loads `ansible.cfg` and the SOPS vars plugin). `data_volume`
 mounts `/srv/data`; `backup` deploys the scripts and units but starts nothing. The host values —
 `k3s_node_ip`, `k3s_node_external_ip` and the volume device — are derived (P4-03); pass
-`-e vps_data_linux_device=<terraform output -raw vps_data_linux_device>` so the replacement host
+`-e data_volume_vps_linux_device=<terraform output -raw vps_data_linux_device>` so the replacement host
 mounts the right volume. Also note the node **must** be named `vps` (step 4).
 
 **4. Restore etcd — or bootstrap from git — and keep the node's name.** Either path works; which

@@ -3,19 +3,19 @@
 # the `vps-data` volume gets a NEW id (and therefore a new /dev/disk/by-id path), so the
 # authoritative value comes from the owning checkout:
 #
-#   cd ~/dev/upayanmazumder/cluster && scripts/tf.sh output -raw vps_data_linux_device
+#   cd ~/dev/upayanmazumder/cluster && scripts/tf.sh output -raw data_volume_vps_linux_device
 #
 # and is passed to this play as:
 #
-#   ansible-playbook site.yml -e vps_data_linux_device=/dev/disk/by-id/scsi-0HC_Volume_<id>
+#   ansible-playbook site.yml -e data_volume_vps_linux_device=/dev/disk/by-id/scsi-0HC_Volume_<id>
 #
 # The default below is the *live* volume's device as it exists today (verified on the node
 # 2026-09-29: `readlink -f /dev/disk/by-id/scsi-0HC_Volume_106969476` -> ../../sdd, mounted at
 # /srv/data). It keeps a `-e`-less `--check` run and any non-rebuild maintenance run working; a
 # rebuild MUST pass `-e`, because the fallback names a volume that no longer exists and the role
 # fails loudly on a missing device rather than mounting the wrong one.
-vps_data_linux_device: /dev/disk/by-id/scsi-0HC_Volume_106969476
-data_volume_device: "{{ vps_data_linux_device }}"
+data_volume_vps_linux_device: /dev/disk/by-id/scsi-0HC_Volume_106969476
+data_volume_device: "{{ data_volume_vps_linux_device }}"
 data_volume_mount_path: /srv/data
 
 # Directories under the mount that a workload needs to pre-exist, with the ownership that workload
