@@ -120,11 +120,20 @@ k8s/
 | `api-bandit.upayan.dev` | `502` | bandit's own PM2 backend never binds `:5000`: MongoDB Atlas rejects the connection (allowlist). Atlas is out of scope in `docs/storage.md`; the frontend host is healthy |
 | `qwik.dj.upayan.dev`, `react.dj.upayan.dev`, `api.ks.upayan.dev` | TLS handshake failure at the **Cloudflare edge** | Cloudflare Universal SSL covers `upayan.dev` + one wildcard level, so two-level names have no certificate. Not fixable from the origin — use single-level hyphenated API hostnames (the convention everywhere else) or add an edge certificate |
 
-**Tokens on the workstation.** A Cloudflare API token (*SSL and Certificates: Edit*, expires
-2027-01-03) is stored outside both repositories — as is every other credential — and is used for
-origin-certificate issuance and revocation; it deliberately has no R2 scope. Read it into an
-environment variable at point of use — never print it, and never write its location into a file that
-this repository publishes.
+**Tokens on the workstation.** A Cloudflare API token is stored outside both repositories — as is every
+other credential — and is used for origin-certificate issuance and revocation. It is documented as
+*SSL and Certificates: Edit* with no R2 scope, **and that documentation is incomplete.** Measured
+2026-09-29 against the live API: the token **can read and write Cloudflare Access applications** at
+zone level (a `GET …/access/apps` succeeds, and a deliberately invalid `POST` returns the *validation*
+error `12130 access.api.error.invalid_request` rather than an authorization error — a missing scope
+answers `9109 Unauthorized`), and it is **not** restricted to the zone's certificate settings. It also
+cannot touch account-level resources (`/accounts` → `9109`).
+Two consequences. **Operationally:** N3 needs no new token — writing the Access applications for
+`argocd`/`grafana` is already possible; the only missing input is the **allow-list of identities**.
+**Security-wise:** this is a broader credential than the repository claims, so either narrow the token
+to the scopes actually needed or record the wider scope deliberately — do not leave the description
+saying "certificates only". Read the value into an environment variable at point of use — never print
+it, and never write its location into a file that this repository publishes.
 
 **Backups live on the node, but the offsite leg is current.** The restic repository is on the root
 disk — so losing the node takes it — but the Cloudflare R2 offsite copy is **live and succeeding**
