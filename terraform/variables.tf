@@ -30,14 +30,13 @@ variable "enable_cloudflare_access" {
   type        = bool
   default     = false
 
-  validation {
-    # Why a guard rather than a comment asking nicely: enabling Access with an empty allow-list denies
-    # *everyone*, including the owner, and the way out is not obvious from the ArgoCD UI you can no
-    # longer reach. This is the same class of "the plan cannot express a broken state" check as the
-    # rebuild-server auth key (P3-04), and it fires at plan time, before anything is created.
-    condition     = !var.enable_cloudflare_access || length(var.access_allowed_emails) > 0
-    error_message = "enable_cloudflare_access = true requires access_allowed_emails to name at least one identity — an Access policy with an empty allow-list would lock every user, including you, out of the ArgoCD and Grafana UIs."
-  }
+  # The guard that refuses an empty allow-list lives in `access.tf` as a `lifecycle.precondition`, NOT
+  # here as a `validation`. That is not style: **a variable validation may only refer to its own
+  # variable**, and this check is about two variables agreeing. Terraform 1.15 accepts the cross
+  # reference; the version CI pins (~> 1.7) rejects it at `terraform init` with "Invalid reference in
+  # variable validation" — which is precisely the bug that broke this repository's `terraform` job on
+  # P3-04 (fixed in `2500dc9`), reproduced here because the same shape was written again. See the
+  # changelog entry for 2026-09-29 naming that repeat.
 }
 
 variable "emergency_ssh_cidr" {

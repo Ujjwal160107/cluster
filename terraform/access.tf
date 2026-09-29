@@ -11,9 +11,9 @@
 #
 #   1. **An Access policy with an empty allow-list is an outage.** It would deny everyone, including
 #      the owner, for ArgoCD — and the recovery path (port-forward) is a workstation trick, not
-#      something to discover at the moment the control plane is dark. The `validation` on
-#      `enable_cloudflare_access` makes that state unrepresentable: flipping the flag without supplying
-#      identities fails the plan.
+#      something to discover at the moment the control plane is dark. The `lifecycle.precondition` on
+#      `cloudflare_zero_trust_access_application.admin_ui` makes that state unrepresentable: flipping
+#      the flag without supplying identities fails the plan before anything is created.
 #   2. The plan's own ordering puts N3 after N2 (a proven tailnet path), because the documented
 #      fallback for the ArgoCD CLI is `kubectl port-forward` over the tailnet rather than through the
 #      browser.
@@ -50,7 +50,7 @@
 #   | `enable_cloudflare_access` | `access_allowed_emails` | `terraform plan` |
 #   |---|---|---|
 #   | false (default) | `[]` | **No changes.** Your infrastructure matches the configuration. |
-#   | true | `[]` | **refused** — `enable_cloudflare_access = true requires access_allowed_emails…` |
+#   | true | `[]` | **refused** — `Resource precondition failed: enable_cloudflare_access = true requires access_allowed_emails…` |
 #   | true | `["<one address>"]` | **`Plan: 4 to add, 0 to change, 0 to destroy`** (2 applications + 2 policies) |
 # So the gate is real in both directions: it cannot lock anyone out by being applied empty, and it does
 # do exactly what it claims when armed.
@@ -80,6 +80,19 @@ resource "cloudflare_zero_trust_access_application" "admin_ui" {
   # Long enough not to re-authenticate during a working session, short enough that a lost laptop does
   # not stay logged in. Grafana is where the VCAP log dashboards live, so it is not a trivial session.
   session_duration = "24h"
+
+  lifecycle {
+    # The guard against an empty allow-list, and it has to live *here* rather than in a `validation` on
+    # `enable_cloudflare_access`: a variable validation may only refer to its own variable, so
+    # "these two variables must agree" is rejected outright by Terraform 1.7 — the version CI pins —
+    # at `terraform init`. A precondition can reference both, and it is evaluated exactly when this
+    # resource is planned, i.e. only when the feature is on. When the feature is off, `for_each` is
+    # empty, no instance is planned, and nothing is evaluated: the default path stays inert.
+    precondition {
+      condition     = length(var.access_allowed_emails) > 0
+      error_message = "enable_cloudflare_access = true requires access_allowed_emails to name at least one identity — an Access policy with an empty allow-list would lock every user, including you, out of the ArgoCD and Grafana UIs."
+    }
+  }
 }
 
 resource "cloudflare_zero_trust_access_policy" "admin_ui_allow" {
