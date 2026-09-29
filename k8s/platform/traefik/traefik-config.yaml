@@ -8,23 +8,34 @@ spec:
     # This is the cluster's ONLY HelmChartConfig/traefik (two would collide on name), so every Traefik
     # setting lives here.
     ports:
-      postgres-dev:
-        port: 5432
+      # N7: the VCAP Postgres edge. These replace `postgres-dev`(5432)/`postgres-staging`(5433),
+      # which are closed permanently (OD-1) — nothing serves them, and Traefik no longer even
+      # listens on them.
+      #
+      # The listeners exist here, but **nothing outside can reach them**: the Hetzner firewall has
+      # no rule for 15432/15433. They open only once P2-08 has landed and VCAP has accepted the
+      # pg_hba / non-superuser-app-role change (the plan's N7 gate) — until then this is the
+      # cluster half, deliberately inert from the internet, and an in-cluster connection over
+      # 15432 adds TLS rather than removing any control.
+      vcap-pg-dev:
+        port: 15432
         expose:
           default: true
-        exposedPort: 5432
+        exposedPort: 15432
         protocol: TCP
-      postgres-staging:
-        port: 5433
+      vcap-pg-staging:
+        port: 15433
         expose:
           default: true
-        exposedPort: 5433
+        exposedPort: 15433
         protocol: TCP
       metrics:
         port: 9100
         expose:
-          # In the Service so Prometheus can scrape it in-cluster. It is not reachable from the
-          # internet: the Hetzner firewall allows only 22/80/443/6443/5432/5433/udp-41641/icmp.
+          # In the Service so Prometheus can scrape it in-cluster. Not reachable from the
+          # internet: the firewall's only world-open tcp rules are 22, 6443 and the two Postgres
+          # ports, and 80/443 are restricted to Cloudflare's ranges (N4). UDP 41641 is Tailscale
+          # and icmp is answered.
           default: true
         exposedPort: 9100
         protocol: TCP

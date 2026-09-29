@@ -23,10 +23,11 @@ they **cannot yet**.
 
 | | Dev | Staging |
 |---|---|---|
-| Host | the node's public address (the databases are HBA-scoped, not host-scoped) | same |
+| `host` (for the TLS name) | `pg-dev.upayan.dev` | `pg-staging.upayan.dev` |
+| `hostaddr` (what is actually dialled) | the node's public address | same |
 | Port | **15432** | **15433** |
 | TLS | required | required |
-| Verification | `sslmode=verify-ca` against the VCAP Postgres edge CA | same |
+| Verification | `sslmode=verify-full` recommended, `verify-ca` the minimum, against the VCAP Postgres edge CA | same |
 | Login | a **per-person, non-superuser** role | same |
 | Superuser | pod network only — never over this path | same |
 
@@ -37,21 +38,57 @@ inherited accident).
 
 ### Connecting
 
-Clients connect by **IP address**, not hostname: the edge routes with `HostSNI("*")` and the node has
-no origin-direct database hostname (Cloudflare's proxy does not carry arbitrary TCP ports). That is
-why the contract is `verify-ca` and not `verify-full` — there is no name for the certificate to match.
+The client is given a **name for the certificate** and an **address to dial**, separately:
+
+- `host=pg-<env>.upayan.dev` is what libpq puts in the TLS SNI and what the certificate is verified
+  against. **It intentionally has no DNS record** — it is not meant to resolve, and creating one would
+  be against this repository's rule that DNS records are adopted from the live zone rather than
+  hand-written.
+- `hostaddr=<node public address>` is the address actually dialled.
+
+That split is what makes the routing work: the edge routes on a **specific SNI**, and a client that
+connects by bare IP sends none, so Traefik would fall back to the cluster's default certificate — the
+`*.upayan.dev` wildcard — which does not chain to the edge CA. Naming the SNI lets Traefik present the
+edge's own leaf instead, with nothing else about the cluster's TLS changed.
 
 ```bash
-# The CA certificate is handed to you out-of-band (see "Requesting a role"); save it, do not trust
-# a copy from a chat message.
-psql "host=<node public IP> port=15432 dbname=<your db> user=<your role> \
-      sslmode=verify-ca sslrootcert=/path/to/vcap-postgres-edge-ca.crt"
+psql "host=pg-dev.upayan.dev hostaddr=<node public address> port=15432 \
+      dbname=<your db> user=<your role> sslmode=verify-full sslrootcert=/path/to/vcap-postgres-edge-ca.crt"
 ```
 
-- `sslmode=verify-ca` requires the server certificate to chain to the CA you hold. Do **not** use
-  `sslmode=require` (it accepts any certificate, so it is not verification) and do not disable TLS.
+- `verify-full` checks the chain **and** that the certificate carries `pg-dev.upayan.dev`, which it
+  does. `verify-ca` checks only the chain and also works (and is the fallback if your client cannot
+  set `host` and `hostaddr` separately). Do **not** use `sslmode=require` (it accepts any certificate,
+  so it is not verification) and do not disable TLS.
 - Your role is **not** a superuser. It can reach only the database(s) it was granted; `CREATE
   DATABASE`, `CREATE ROLE` and cross-database reads are expected to fail.
+
+### The CA certificate
+
+Public, and safe to copy from here (it is a certificate, not a key):
+
+```pem
+-----BEGIN CERTIFICATE-----
+MIIDVDCCAjygAwIBAgIUHfY5BjlfVIEY6Qck0JPFQNJHeSgwDQYJKoZIhvcNAQEL
+BQAwQjErMCkGA1UEAwwiVkNBUCBQb3N0Z3JlcyBlZGdlIENBICh1cGF5YW4uZGV2
+KTETMBEGA1UECgwKdXBheWFuLmRldjAeFw0yNjA5MjkxNzE2NDJaFw0zNjA5MjYx
+NzE2NDJaMEIxKzApBgNVBAMMIlZDQVAgUG9zdGdyZXMgZWRnZSBDQSAodXBheWFu
+LmRldikxEzARBgNVBAoMCnVwYXlhbi5kZXYwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+DwAwggEKAoIBAQDKUPMI0ghZX2y8Ueicm+Vg+60X7x0DKTrk3sBPGP9L6z3onfu4
+OkJskueFZH95Ce5I1z6DWLVUzgKAiP/ybxKK/aITVjsRFhjUHc3yM71nVVGx49Nb
+Pa3OKE1ZpVQtQkyrTSQxt7PucodjCtGTGzTL9G2EOcdFRIIB7bQS1y0HZ0pSCcEP
+sADqmSz3bUvlYYziYe0EwdsFOx6pnjSZvqc6wOfQA2Vew3Jox85FKt4vr/KXk9cD
+M+m3jfz+V6KBvfzZ07trg8U8Atj7nbc3WxiHIA8+3AJDjiSryF1E7LqQLqLVSHuP
+XRvjZhVgvY7Dr5FsPFrqNmmS9Gp09DLeedpBAgMBAAGjQjBAMA8GA1UdEwEB/wQF
+MAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBT+/pP3XIczrXYt3fRNN3GG
+0EifNDANBgkqhkiG9w0BAQsFAAOCAQEAqWrO/A6zVEQITZcEABjUfEkLZfSaV0Wd
+Q2u5wsz0PfGErvDHwfIe+vddzBCQmA0usj1oGeUpU0auxtaSR6RfBMCJJIYOkk3v
+AOZudvdElM+H5OEu00AQOV2Bk47ecJCDjYYhyDH/9oE/CShLKXmnfihc/V0tN1tp
+iGanpr0rJLc3jFiSEAPMfEeVHOCjLQC23Nhve/vYNCxPAdusooAkUE1Ghr2tHswh
+h3nU8ReH7Klm/+v9ZjAcPIe5ql75+YnufJ9xgH3kgNWasPQ3rKqqRIPJGxFEhyrd
+qv73zwdqKx0GmTjeQcjcszfVkO2G9grEEuUfRM6ZBEm2vJeab7Qe6g==
+-----END CERTIFICATE-----
+```
 
 ## Requesting a role
 
@@ -77,22 +114,23 @@ itself runs as a non-superuser role after P2-08.
 The edge TLS certificate is a leaf signed by a **private CA whose key lives only in the owner's
 password manager and offline medium** (never in git, never on the node). The leaf is committed
 SOPS-encrypted and applied by ArgoCD as the in-cluster Secret `vcap-postgres-edge-tls`, from
-`k8s/apps/vcap/edge/<env>/tls.sops.yaml`.
+`k8s/apps/vcap/edge/<env>/secrets.sops.yaml`.
 
 **Leaf renewal** (a new certificate, same CA — this is the routine rotation):
 
 1. On the workstation, generate a key and CSR for the leaf, signed by the private CA (the CA key is
    read from the password manager only for this step; never copy it to disk or scrollback).
-2. Replace the `tls.crt` / `tls.key` entries in `k8s/apps/vcap/edge/<env>/tls.sops.yaml` and
+2. Replace the `tls.crt` / `tls.key` entries in `k8s/apps/vcap/edge/<env>/secrets.sops.yaml` and
    re-encrypt with `sops`.
 3. Commit and push; ArgoCD applies the Secret on the next sync (or annotate the app for a hard
    refresh).
 4. Roll the edge so the connections are served the new leaf — the IngressRouteTCP/Traefik data plane
    is cluster-owned (P2-05/P2-08); a `kubectl rollout restart deploy/traefik -n kube-system` in a
    window is the documented way if the leaf is loaded at start.
-5. Verify from an ordinary host:
-   `openssl s_client -starttls postgres -connect <public IP>:15432 -CAfile <ca> -verify_return_error`
-   must verify against the CA and carry the new leaf's validity dates.
+5. Verify from the node (works with the ports still closed):
+   `openssl s_client -connect 127.0.0.1:15432 -servername pg-dev.upayan.dev -CAfile ca.crt
+   -verify_return_error` must verify and show the new leaf's validity dates. From an ordinary host,
+   add `-starttls postgres` and dial the public address once the port is open.
 
 **CA rotation** (the CA key itself is being replaced) is a different, larger operation: every client
 is pinned to the old CA, so all of them must be re-provisioned with the new CA certificate. Treat it
