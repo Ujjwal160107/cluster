@@ -1361,13 +1361,26 @@ groups:
   # behind — the only record of "someone tried the superuser over the network and was refused" is the
   # server's own log line, and the same is true of a password guessing run against ArgoCD.
   #
-  # State of each, stated because a provisioned alert that has never fired is not evidence:
-  #   - `argocd-login-failures` was exercised end-to-end when it was added (a deliberately wrong
-  #     password against `argocd.upayan.dev`, then the query returned a value).
-  #   - `vcap-postgres-auth-failures` **cannot be exercised yet**: 15432/15433 are closed and the
-  #     tenant NetworkPolicy admits same-namespace traffic only, so no authentication is attempted at
-  #     all. It is authored so the coverage exists on the day P7-N7 opens the port, and it is inert
-  #     until then — which is the correct failure mode for an alert about a path that is not open.
+  # State of each, stated because a provisioned alert that has never fired is not evidence. Neither
+  # has been exercised, and the reason is an observability defect rather than the rules:
+  #   - `argocd-login-failures` WAS exercised the day it was added — three deliberate wrong-password
+  #     logins against `argocd.upayan.dev` (`Invalid username or password` in the CLI was confirmed),
+  #     and then the rule's exact LogQL was run straight against Loki. It returned **zero series**.
+  #     Loki's own querier log for that query is the evidence that this is not the rule:
+  #     `status=200 returned_lines=0 store_chunks_download_time=0s chunk_refs_fetch_time=425µs` — the
+  #     **store returned no chunk references at all**, and `table_manager` reports
+  #     `distinct_users_len=0`. Meanwhile the write path is healthy
+  #     (`loki_distributor_bytes_received_total{tenant="fake"} = 522 MB`, 4804 chunks created,
+  #     12 020 files under `/loki/chunks`). So Loki accepts writes and reads back nothing, for *any*
+  #     selector, at *any* range — which means the VCAP log dashboards are inert too.
+  #   - `vcap-postgres-auth-failures` cannot be exercised for a second reason on top of that:
+  #     15432/15433 are closed and the tenant NetworkPolicy admits same-namespace traffic only, so no
+  #     authentication is attempted at all. It is authored so the coverage exists on the day P7-N7
+  #     opens the port.
+  #
+  # **Do not read a clean alert list as coverage.** Both rules are correctly shaped and neither has
+  # observed a single event. Fixing Loki's read path is its own task and is NOT part of this
+  # migration; it is recorded in the changelog for the same day.
   - uid: vcap-postgres-auth-failures
     title: VCAP Postgres authentication failures
     condition: C
