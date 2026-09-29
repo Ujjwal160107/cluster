@@ -109,6 +109,45 @@ Names and passwords are never committed — the owner keeps the list privately (
 There is no self-service path. The superuser credentials are not handed out, and the application
 itself runs as a non-superuser role after P2-08.
 
+## Operating the database (the role model)
+
+Since 2026-09-29 the application no longer logs in as the bootstrap superuser. What exists, and what
+each thing is for:
+
+| Role | Kind | Purpose |
+|---|---|---|
+| the bootstrap role (`POSTGRES_USER`) | superuser, **socket only** | `kubectl exec … psql` for operator work and for anything needing superuser (creating extensions, for instance). It is refused over TCP by `pg_hba`. |
+| `vcap_app` | LOGIN, NOSUPERUSER, NOCREATEROLE, NOCREATEDB | the application. It **owns** the database and every object in `public`, so migrations and DDL work without superuser. |
+| `vcap_people` | NOLOGIN group | the named people. `SELECT` by default, no writes. |
+| one LOGIN role per person | member of `vcap_people` | handed out individually so access can be revoked individually. |
+
+**Adding a person** (the password never goes through git, chat or email — hand it over in the password
+manager):
+
+```bash
+kubectl -n vcap-dev exec -it deploy/vcap-backend-dev-postgres -- \
+  psql -U "$POSTGRES_USER" -d vcap -c "CREATE ROLE <name> LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '<generated>' VALID UNTIL '<date>'"
+kubectl -n vcap-dev exec -it deploy/vcap-backend-dev-postgres -- \
+  psql -U "$POSTGRES_USER" -d vcap -c "GRANT vcap_people TO <name>"
+```
+
+`SELECT` is granted through `vcap_people` plus `ALTER DEFAULT PRIVILEGES FOR ROLE vcap_app`, so tables
+created by a later migration are readable automatically. Writes are granted per person and per
+environment only if VCAP asks.
+
+**Two traps worth knowing before you touch this:**
+
+- **`REASSIGN OWNED` does not work here.** The bootstrap role owns `information_schema` and the
+  `pg_catalog`-side `plpgsql` extension, which PostgreSQL refuses to reassign —
+  *"cannot reassign ownership of objects owned by role … because they are required by the database
+  system"*. Ownership must be moved **per object** (`ALTER TABLE/SEQUENCE/VIEW/ROUTINE/TYPE/DOMAIN …
+  OWNER TO`). A table's composite row type cannot be `ALTER TYPE`d at all — use `ALTER TABLE`, and be
+  aware that under `ON_ERROR_STOP` one such statement aborts the rest of the batch.
+- **The policy is a file, not a flag.** `pg_hba.conf` is installed *into the data directory*, so
+  setting the chart's `postgres.pgHba.mode` to `off` does **not** restore the previous behaviour — the
+  restrictive file stays in force. `mode: "default"` is the revert state; it writes the permissive
+  policy back explicitly.
+
 ## Rotating the TLS leaf
 
 The edge TLS certificate is a leaf signed by a **private CA whose key lives only in the owner's
