@@ -2,13 +2,19 @@
 # yet. The final locked-down ruleset is a separate, later change to this file — do not jump ahead
 # to it here.
 #
-# Postgres ports: the 5432/5433 rules below are a leftover. **5432/5433 are closed and must not be
-# reopened** — nothing serves them (the unmanaged NodePort duplicates were deleted and the tenant
-# chart's same-namespace NetworkPolicy blocks the Traefik path), and the owner decision (OD-1) makes
-# **15432 (dev) / 15433 (staging)** the target public path, which is **NOT OPEN YET**: no rule for
-# those ports exists here yet, and the hardening they depend on (TLS, per-person non-superuser roles,
-# a network-superuser-locking pg_hba, auth-failure alerting) does not exist either. Leave 5432/5433
-# closed; add 15432/15433 only together with that hardening.
+# Postgres ports — N7 (2026-09-29). **The 5432/5433 rules are gone** (they were a leftover: nothing
+# served them, and leaving a world-open rule for a port that "must not reopen" is exactly the
+# inherited accident OD-1 exists to remove) and the target path **15432 (dev) / 15433 (staging)** is
+# opened deliberately, one port at a time.
+#
+# The hardening this depends on now exists: TLS at Traefik with a private-CA leaf (verified by
+# handshake), a non-superuser application role that the app actually uses (verified in
+# `pg_stat_activity`), a `pg_hba.conf` that refuses the bootstrap superuser over TCP (verified from a
+# non-loopback client: `FATAL: pg_hba.conf rejects connection … user "vcap_user"`), per-person
+# read-only roles, an additive NetworkPolicy admitting only Traefik, and auth-failure alerting.
+#
+# **15432 opens first, and 15433 only after 15432 has been exercised by a real client** — the plan is
+# explicit, and staging holds the real data. Add the second port as its own reviewed change.
 
 # N4 (P7): restrict 80/443 to Cloudflare's edge. Fetched, never hand-copied — a static list rots
 # silently, and a wrong range list here is a total ingress outage (Cloudflare can reach nothing, every
@@ -76,16 +82,12 @@ resource "hcloud_firewall" "vps" {
     port       = "6443"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
+  # N7: the VCAP Postgres edge, dev first. Public by design (OD-1), TLS-required by the edge
+  # router. 15433 is deliberately NOT here yet: staging opens only after 15432 has been exercised.
   rule {
     direction  = "in"
     protocol   = "tcp"
-    port       = "5432"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "5433"
+    port       = "15432"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
   rule {

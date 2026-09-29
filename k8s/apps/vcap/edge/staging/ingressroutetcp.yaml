@@ -41,3 +41,7 @@ spec:
     # Leaf signed by the cluster's private Postgres edge CA; the CA certificate is public and in the
     # runbook. Traefik selects it because the SAN matches the SNI above.
     secretName: vcap-postgres-edge-tls
+    # …and the ALPN name libpq 17+ offers, which Traefik otherwise answers with alert 120 — see
+    # tlsoption.yaml, which carries the measurement.
+    options:
+      name: vcap-pg
