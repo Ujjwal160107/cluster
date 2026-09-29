@@ -1,0 +1,18 @@
+[Unit]
+Description=Run vps-backup class {{ backup_class }}
+
+[Timer]
+OnBootSec=5min
+{% if backup_class == 'A' %}
+# 30 min, not 15: the interval drives how often restic lists the R2 repository, and Class A
+# operations are the one free-tier limit this workload could plausibly approach (1M/month).
+# Halving the cadence doubles that headroom; the class-A RPO becomes 30 min as a result.
+# Measured operation counts after the first days with R2 determine whether this can go back to 15.
+OnUnitActiveSec=30min
+{% else %}
+OnCalendar=daily
+{% endif %}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

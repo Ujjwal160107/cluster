@@ -1,0 +1,52 @@
+# rankstack — api, mongo (single-node replica set), redis. No web Deployment
+# here: the frontend is deployed to Vercel (rankstack.upayan.dev), not this
+# cluster.
+# Chart source: upayanmazumder/rankstack repo, k8s/chart/ (public repo).
+# Values: this vps repo, k8s/apps/rankstack/values/prod.yaml (secrets
+# stay in the private repo -- same split as vcap-backend-staging.yaml).
+# Explicit Application (not ApplicationSet) so it can carry
+# argocd-image-updater annotations.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rankstack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    # Track the mutable 'edge' tag by digest. No write-back-method annotation
+    # -> defaults to "argocd" (in-cluster Helm-parameter override on this
+    # Application object), not git -- ghcr.io/upayanmazumder/rankstack/api
+    # is public, and routine image updates should need zero writes to
+    # either this repo or the app repo (same pattern as meghmitra).
+    argocd-image-updater.argoproj.io/image-list: "api=ghcr.io/upayanmazumder/rankstack/api:edge"
+    argocd-image-updater.argoproj.io/api.update-strategy: digest
+    argocd-image-updater.argoproj.io/api.helm.image-name: image.repository
+    argocd-image-updater.argoproj.io/api.helm.image-tag: image.tag
+spec:
+  project: apps
+  sources:
+    - repoURL: https://github.com/upayanmazumder/rankstack
+      path: k8s/chart
+      targetRevision: main
+      helm:
+        valueFiles:
+          - $values/k8s/apps/rankstack/values/prod.yaml
+    - repoURL: https://github.com/upayanmazumder/vps
+      targetRevision: main
+      ref: values
+    # S11 hardening: the chart has no NetworkPolicy templates, so the
+    # namespace's ingress policies live in this repo and are applied by this
+    # third source.
+    - repoURL: https://github.com/upayanmazumder/vps
+      targetRevision: main
+      path: k8s/apps/rankstack/manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rankstack
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

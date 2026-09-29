@@ -1,0 +1,15 @@
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: smart-home-system-api
+spec:
+  hosts:
+    - api-smart-home-system.upayan.dev
+  scaleTargetRef:
+    name: smart-home-system-api
+    service: smart-home-system-api
+    port: 5000
+  replicas:
+    min: 0
+    max: 1
+  scaledownPeriod: 300

@@ -1,0 +1,19 @@
+[Unit]
+Description=vps-backup offsite copy to Cloudflare R2 (restic copy, all tags)
+After=k3s.service
+
+[Service]
+Type=oneshot
+# systemd gives the unit no HOME, which makes restic log "unable to open cache: neither
+# $XDG_CACHE_HOME nor $HOME are defined" and re-scan the repository every run. Harmless for a local
+# repo, measurable once the other end is an object store — set it explicitly.
+Environment=HOME=/root
+# The local repository's password (copy source), SOPS-rendered — the same file the other backup units
+# use. The `-` prefix keeps a missing file non-fatal.
+EnvironmentFile=-{{ backup_env_file }}
+# The R2 destination: endpoint (which carries the account id), bucket, S3 key pair, region, and
+# optionally RESTIC_OFFSITE_PASSWORD. Host-local by design — created by the operator, never committed
+# and never SOPS-encrypted (README.md). Also non-fatal, so a host without it still starts the unit and
+# no-ops instead of failing: the script's own destination check decides.
+EnvironmentFile=-{{ backup_offsite_env_file }}
+ExecStart={{ backup_offsite_script_path }}

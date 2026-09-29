@@ -1,0 +1,71 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: apps
+  namespace: argocd
+spec:
+  description: >-
+    The cluster's application workloads. Replaces the separate `de` and `sg`
+    projects (consolidated 2026-09-28): those existed because `de` and `sg`
+    were meant to be different nodes, but there is one node and there will be
+    for the foreseeable future, so the split only added naming and routing
+    overhead.
+  sourceRepos:
+    - https://github.com/upayanmazumder/vps
+    # P6-01: added so every child can resolve from the new source of truth before the switch.
+    # `vps` stays until P8-02 — that is the rollback window (R-1), and it closes deliberately.
+    - https://github.com/upayanmazumder/cluster
+    - https://github.com/upayanmazumder/rankstack
+  # S11: destinations enumerated instead of `namespace: "*"`. Adding an app
+  # means adding its namespace here too; a mismatch fails loudly ("namespace X
+  # is not permitted in project apps") rather than deploying anywhere.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: bandit
+    - server: https://kubernetes.default.svc
+      namespace: bitvault
+    - server: https://kubernetes.default.svc
+      namespace: cas-api
+    - server: https://kubernetes.default.svc
+      namespace: dj-html-nodejs-web
+    - server: https://kubernetes.default.svc
+      namespace: kodesphere
+    - server: https://kubernetes.default.svc
+      namespace: learning-docker
+    - server: https://kubernetes.default.svc
+      namespace: learning-qwik
+    - server: https://kubernetes.default.svc
+      namespace: learning-react
+    # P3-M4 (OD-4): `meghmitra` moved to its own AppProject. The application on those hostnames is
+    # now owned by `Ujjwal160107/adhigrahan-radar`, and the tenant's project permits five namespaced
+    # kinds and no cluster kinds at all. Leaving the destination here would keep a second project
+    # able to deploy into that namespace — which is the thing ESC-001 taught this repository not to
+    # leave lying around.
+    - server: https://kubernetes.default.svc
+      namespace: mochi
+    - server: https://kubernetes.default.svc
+      namespace: rankstack
+    - server: https://kubernetes.default.svc
+      namespace: smart-home-system-api
+    - server: https://kubernetes.default.svc
+      namespace: status-page
+    - server: https://kubernetes.default.svc
+      namespace: upayan-v5
+    - server: https://kubernetes.default.svc
+      namespace: upayan-web
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    # S8 puts repo-owned static PVs in git (`k8s/apps/meghmitra/postgres.yaml`)
+    # rather than applying them out-of-band, so the project has to permit
+    # PersistentVolume -- without it every sync of `meghmitra` failed with
+    # "resource :PersistentVolume is not permitted in project de".
+    - group: ""
+      kind: PersistentVolume
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  orphanedResources:
+    warn: true

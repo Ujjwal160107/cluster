@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: learning-react
+resources:
+  - networkpolicy.yaml
+  - deployments.yaml
+  - services.yaml
+  - ingress.yaml
+images:
+  - name: ghcr.io/upayanmazumder/devjourney/learning-react
+    newTag: latest
+
+components:
+  # CLUSTER-001: shared namespace + PSA labels; the per-app namespace.yaml this replaces was
+  # byte-identical apart from its `name:`, which the kustomization's `namespace:` now supplies.
+  - ../../components/namespace-baseline

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: learning-react-frontend
+spec:
+  selector:
+    app: learning-react
+  ports:
+  - port: 3000
+    targetPort: 3000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: learning-react-backend
+spec:
+  selector:
+    app: learning-react
+  ports:
+  - port: 5000
+    targetPort: 5000

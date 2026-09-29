@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: meghmitra
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    # P3-02: root must never be able to prune an AppProject, whatever happens to this file or to the
+    # directory it lives in. A project is the thing that grants a tenant its kinds; losing it does
+    # not stop a running workload, but it does stop the next sync of every app inside it, which is a
+    # confusing failure to debug at the moment it matters most.
+spec:
+  description: >-
+    Adhigrahan Radar (the replacement application on the meghmitra hostnames). Tenant-owned
+    manifests in Ujjwal160107/adhigrahan-radar; the Namespace, the static PV, this project and the
+    Application are cluster-owned because a third-party repository must not create cluster-scoped
+    objects (ESC-001's lesson, 2026-09-29).
+  sourceRepos:
+    - https://github.com/Ujjwal160107/adhigrahan-radar
+  # Exactly one destination, and it is the same namespace the old application used. The hostnames
+  # `meghmitra.upayan.dev` / `api-meghmitra.upayan.dev` and the namespace are shared deliberately:
+  # this deployment replaces that one rather than standing beside it (OD-4).
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: meghmitra
+  # Nothing the tenant renders is cluster-scoped, and the tenant must not be able to make it so.
+  # `clusterResourceWhitelist: []` is the same control that closed the VCAP escalation: a push to an
+  # unprotected tenant `main` cannot create a ClusterRole, a ClusterRoleBinding or a Namespace.
+  clusterResourceWhitelist: []
+  # `kustomize build deploy/k8s` on the tenant's `main` renders 9 objects in exactly these five
+  # kinds (verified 2026-09-29 with `kustomize build` + `kubeconform -strict`: 9 valid, 0 invalid).
+  # Notably absent: `Secret`. It is not needed — both GHCR packages are public, so there is no pull
+  # Secret — and leaving it out means the tenant cannot put a credential in this namespace through
+  # GitOps at all.
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+  orphanedResources:
+    warn: true

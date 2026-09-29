@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the vps-backup restore drill monthly for class C
+
+[Timer]
+# 15th of the month, 06:00 UTC: a fortnight from the class-A drill (1st, 05:00) and clear of the
+# weekly integrity check (Sun 04:00) and the Monday prune (03:00). The drills create scratch pods, and
+# this node is memory-tight, so the two deliberately never overlap.
+OnCalendar=*-*-15 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

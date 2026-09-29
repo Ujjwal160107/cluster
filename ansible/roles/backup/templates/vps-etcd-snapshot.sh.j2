@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Managed by ansible/roles/backup. Separate from vps-backup.sh (different cadence: 12h vs
+# 15min/daily) and from the k3s role's one-off manual snapshots (see docs/runbooks/recover-k3s.md).
+#
+# Two jobs, and the second is the one that makes the first useful:
+#   1. `k3s etcd-snapshot save` into a directory this repo controls (k3s also keeps its own rotation).
+#   2. Push that snapshot, plus the k3s server token and TLS material, into the restic repository.
+#
+# The token/TLS files are what an etcd restore actually needs — without them a snapshot cannot be
+# turned back into a working cluster. They are unreadable without the snapshots and essential with
+# them, and restic encrypts everything it stores, so they belong here rather than in a plaintext
+# offsite copy. Until 2026-09-28 this step did not exist and etcd snapshots were local-only.
+set -uo pipefail
+
+SNAPSHOT_DIR="{{ backup_etcd_snapshot_dir }}"
+TEXTFILE_DIR="{{ backup_node_exporter_textfile_dir | default('/var/lib/node_exporter/textfile_collector') }}"
+RESTIC_REPOSITORY="{{ backup_restic_repository | default('') }}"
+K3S_STATE_DIR="/var/lib/rancher/k3s/server"
+# /etc/rancher/k3s holds the node's k3s config and its admin kubeconfig. Spec §12.2 asks for it
+# alongside token/tls: without it a rebuilt VM has the data and the identity but not the settings.
+K3S_CONFIG_DIR="/etc/rancher/k3s"
+
+# Exported image tarballs for images that can no longer be pulled from anywhere.
+#
+# `quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z` — what vcap-dev and vcap-staging MinIO run, and
+# therefore what sits under vcap-staging's class-A student data — 401s upstream now, and the S0
+# attempt to mirror it to ghcr failed for lack of `write:packages`. The only live copy is the node's
+# containerd cache: an image GC, a node rebuild or a DR restore loses it and MinIO cannot start.
+# The exported tarball is ~64 MB, stored once thanks to deduplication, so it rides along with the
+# infrastructure backup. See plan §5 (Critical) / §16.
+# Every image the cluster can no longer pull. Collected from workload templates (including KEDA
+# scale-to-zero ones) and exported with `k3s ctr images export <out.tar> <repo>@sha256:…`. The S0
+# MinIO tarball was copied in here so there is one place to look.
+IMAGE_TARBALL_DIR="/var/backups/images"
+
+mkdir -p "$SNAPSHOT_DIR"
+rc=0
+
+if k3s etcd-snapshot save --dir "$SNAPSHOT_DIR"; then
+  echo "+ etcd snapshot saved to $SNAPSHOT_DIR"
+else
+  echo "etcd snapshot save FAILED" >&2
+  rc=1
+fi
+
+# P4-07 (2026-09-29): prune this script's own snapshots after 7 days. k3s names them `on-demand-*`
+# (its built-in rotation only covers the snapshots k3s takes itself, not the ones written here with
+# `--dir`), so without this the directory grows without bound. 7 days matches the restic retention
+# intent, so what is pruned locally is already offsite.
+find "$SNAPSHOT_DIR" -name 'on-demand-*' -mtime +7 -delete
+
+if [ "$rc" -eq 0 ] && [ -n "$RESTIC_REPOSITORY" ]; then
+  # `restic` is a child process: this has to be exported, not just assigned. RESTIC_PASSWORD comes
+  # from the systemd EnvironmentFile ({{ backup_env_file }}), SOPS-rendered.
+  export RESTIC_REPOSITORY
+  # Only include tarballs that are actually present, and say so when one is missing rather than
+  # quietly shrinking the backup set.
+  # NOTE: do not write the shell array-length expansion in a .j2 template — its first two characters
+  # are also Jinja's comment opener, and the playbook then fails with "Missing end of comment tag"
+  # (which is how this comment came to be written twice: the first version contained it). Count in a
+  # loop, as below.
+  EXTRA_PATHS=()
+  extra_count=0
+  shopt -s nullglob
+  for tarball in "$IMAGE_TARBALL_DIR"/*.tar; do
+    EXTRA_PATHS+=("$tarball")
+    extra_count=$((extra_count + 1))
+  done
+  shopt -u nullglob
+  if [ "$extra_count" -eq 0 ]; then
+    echo "WARNING: no exported image tarballs found under $IMAGE_TARBALL_DIR — unrepullable images are unprotected" >&2
+  fi
+
+  echo "+ restic backup (etcd snapshot + k3s server token/tls/config + $extra_count image tarball(s))"
+  restic backup "$SNAPSHOT_DIR" "$K3S_STATE_DIR/token" "$K3S_STATE_DIR/tls" "$K3S_CONFIG_DIR" \
+    "${EXTRA_PATHS[@]}" --tag etcd --tag "$(date +%Y-%m-%d)" || rc=1
+elif [ "$rc" -eq 0 ]; then
+  echo "restic_repository not set — etcd snapshots stay local only (see roles/backup/README.md)" >&2
+fi
+
+if [ "$rc" -eq 0 ]; then
+  mkdir -p "$TEXTFILE_DIR"
+  echo "vps_etcd_snapshot_last_success_timestamp $(date +%s)" > "$TEXTFILE_DIR/vps_etcd_snapshot.prom.$$"
+  mv "$TEXTFILE_DIR/vps_etcd_snapshot.prom.$$" "$TEXTFILE_DIR/vps_etcd_snapshot.prom"
+else
+  # This is the script's only failure exit — nothing follows the `fi`, so removing it would make a
+  # failed run report the exit status of the last successful command instead.
+  exit 1
+fi

@@ -1,0 +1,15 @@
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: dj-html-nodejs-web
+spec:
+  hosts:
+    - html-nodejs-web-dj.upayan.dev
+  scaleTargetRef:
+    name: dj-html-nodejs-web
+    service: dj-html-nodejs-web
+    port: 3000
+  replicas:
+    min: 0
+    max: 1
+  scaledownPeriod: 300

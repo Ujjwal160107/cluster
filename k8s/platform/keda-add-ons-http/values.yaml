@@ -1,0 +1,34 @@
+# KEDA HTTP Add-on Helm chart values.
+# Chart defaults assume an HA multi-node cluster (interceptor min=3/max=50,
+# scaler replicas=3). This is a single 4 CPU / 7.75Gi node — trim to what
+# actually fits while still giving the interceptor proxy a little burst room.
+interceptor:
+  replicas:
+    min: 1
+    max: 2
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+scaler:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 96Mi
+
+operator:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 96Mi

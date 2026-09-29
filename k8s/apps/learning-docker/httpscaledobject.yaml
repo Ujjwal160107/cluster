@@ -1,0 +1,15 @@
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: learning-docker
+spec:
+  hosts:
+    - bots.upayan.dev
+  scaleTargetRef:
+    name: learning-docker
+    service: learning-docker
+    port: 3000
+  replicas:
+    min: 0
+    max: 1
+  scaledownPeriod: 300

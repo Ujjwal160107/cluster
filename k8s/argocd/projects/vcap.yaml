@@ -1,0 +1,77 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: vcap
+  namespace: argocd
+spec:
+  description: >-
+    vcap multi-environment (dev + staging) — charts in app repos; one
+    ArgoCD Application per service per environment.
+  sourceRepos:
+    - https://github.com/upayanmazumder/vps
+    - https://github.com/upayanmazumder/cluster
+    - https://github.com/vitscopesoftwareteam/VCAP-STAGING-BACKEND
+    - https://github.com/vitscopesoftwareteam/VCAP-STAGING-FRONTEND
+  # S11: destinations enumerated instead of `namespace: "*"`. Adding an app
+  # means adding its namespace here too; a mismatch fails loudly ("namespace
+  # X is not permitted in project vcap") rather than deploying anywhere.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: vcap-dev
+    - server: https://kubernetes.default.svc
+      namespace: vcap-staging
+  # ESC-001 / VCAP-002 (2026-09-29): this project granted `Namespace`,
+  # `ClusterRole`, `ClusterRoleBinding` and all of `keda.sh/*` at cluster
+  # scope, and every namespaced kind via `group: "*" / kind: "*"`. Together
+  # with an unprotected tenant `main`, that meant a push to a tenant chart
+  # could create a ClusterRoleBinding to `cluster-admin` — proven with a
+  # throwaway Application on 2026-09-29. The tenant is a tenant: it deploys
+  # workloads into two namespaces and nothing else.
+  #
+  # Empty, deliberately. Nothing the three vcap Applications render is
+  # cluster-scoped: their namespaces are declared by the `storage`
+  # Application, their static PVs by the same one, and the public Postgres
+  # edge is cluster-owned (`k8s/apps/vcap/edge/`, applied by these apps but
+  # only as namespaced IngressRouteTCPs).
+  clusterResourceWhitelist: []
+  # Exactly what the chart, `frontend-manifests`, `secrets/` and `edge/`
+  # render, taken from each app's live `status.resources` on 2026-09-29.
+  # Anything new fails as "not permitted in project vcap" — the review gate.
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: apps
+      kind: Deployment
+    - group: batch
+      kind: Job
+    - group: batch
+      kind: CronJob
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: keda.sh
+      kind: ScaledObject
+    - group: keda.sh
+      kind: TriggerAuthentication
+    # The cluster-owned public Postgres edge (k8s/apps/vcap/edge/<env>).
+    # IngressRouteTCP only: Middleware, IngressRoute, TLSOption, ServersTransport
+    # and MiddlewareTCP stay denied — the tenant has no reason to touch routing.
+    - group: traefik.io
+      kind: IngressRouteTCP
+  orphanedResources:
+    warn: true

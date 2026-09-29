@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mochi
+  namespace: mochi
+  labels:
+    app: mochi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mochi
+  template:
+    metadata:
+      labels:
+        app: mochi
+    spec:
+      priorityClassName: low-priority
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      containers:
+        - name: mochi
+          image: ghcr.io/upayanmazumder/mochi:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: mochi-env
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

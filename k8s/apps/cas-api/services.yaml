@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cas-api
+spec:
+  selector:
+    app: cas-api
+  ports:
+  - port: 4000
+    targetPort: 4000

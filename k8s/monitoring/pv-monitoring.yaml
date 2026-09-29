@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: pv-prometheus
+    spec:
+      capacity:
+        storage: 10Gi
+      accessModes:
+        - ReadWriteOnce
+      persistentVolumeReclaimPolicy: Retain
+      storageClassName: hostpath-retain
+      hostPath:
+        path: /var/lib/k8s-monitoring/prometheus
+      nodeAffinity:
+        required:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - vps
+
+  - apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: pv-grafana
+    spec:
+      capacity:
+        storage: 1Gi
+      accessModes:
+        - ReadWriteOnce
+      persistentVolumeReclaimPolicy: Retain
+      storageClassName: hostpath-retain
+      hostPath:
+        path: /var/lib/k8s-monitoring/grafana
+      nodeAffinity:
+        required:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - vps
+
+  - apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: pv-loki
+    spec:
+      capacity:
+        storage: 8Gi
+      accessModes:
+        - ReadWriteOnce
+      persistentVolumeReclaimPolicy: Retain
+      storageClassName: hostpath-retain
+      hostPath:
+        path: /var/lib/k8s-monitoring/loki
+      nodeAffinity:
+        required:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - vps

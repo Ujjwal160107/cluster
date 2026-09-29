@@ -1,0 +1,249 @@
+---
+# Reproduces the exact live k3s flags (see group_vars/vps/main.yaml comment — verified via
+# `systemctl cat k3s` on 2026-09-27: /etc/systemd/system/k3s.service.d/tailscale.conf sets
+# `--tls-san vps.upayan.dev --node-ip=138.201.157.147 --node-external-ip=100.96.250.81
+# --flannel-iface=tailscale0`) into k3s's supported config-file mechanism instead of a systemd
+# drop-in. This role NEVER restarts k3s automatically and NEVER runs the k3s installer if the
+# pinned version is already present — applying the new config is a separate, explicitly confirmed
+# step (see README.md in this role).
+#
+# P4-02 (2026-09-29): two render paths, because a FRESH host and a running one need opposite
+# things.
+#   - No /etc/rancher/k3s/config.yaml yet (fresh host, DR-006): render it DIRECTLY and BEFORE the
+#     installer, because k3s's first start already reads it. Without this a rebuilt node comes up
+#     with no node-ip, flannel-iface or tls-san. Nothing live exists to protect, so the .pending
+#     dance is skipped entirely.
+#   - config.yaml already present (the live host): render config.yaml.pending, diff it against the
+#     live file, and apply it only under `k3s_allow_restart`. A running control plane is never
+#     reconfigured implicitly.
+#
+# P4-03 (2026-09-29): the host values are derived, not frozen in group_vars — k3s_node_ip defaults
+# to ansible_default_ipv4.address and k3s_node_external_ip to the node's tailnet address (read
+# below, after the tailscale role has joined). The live host reproduces exactly today's mapping:
+# primary IPv4 = the public address, tailnet = the Tailscale address, so the rendered file is
+# byte-identical and no SAN change or restart is involved.
+
+- name: Check installed k3s version (before any install attempt)
+  ansible.builtin.command: k3s --version
+  register: k3s_version_before
+  changed_when: false
+  failed_when: false
+  check_mode: false # read-only, safe to run for real even under --check
+
+- name: Ensure /etc/rancher/k3s exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+- name: Check whether a k3s config.yaml already exists
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+  register: k3s_config_stat
+
+# P4-03: read the tailnet address here (the k3s role runs after tailscale in site.yml). A host that
+# is not on the tailnet yields an empty string and the assert below stops the run rather than
+# rendering an empty node-external-ip into a fresh node's config.
+- name: Read the node's tailnet IPv4 address
+  ansible.builtin.command: tailscale ip -4
+  register: k3s_tailscale_ip
+  changed_when: false
+  failed_when: false
+  check_mode: false # read-only, safe to run for real even under --check
+
+- name: Refuse to render a config without a tailnet address
+  ansible.builtin.assert:
+    that:
+      - k3s_tailscale_ip.rc == 0
+      - k3s_tailscale_ip.stdout | trim | length > 0
+    fail_msg: >-
+      `tailscale ip -4` returned nothing. The live mapping is node-ip = the host's primary IPv4 and
+      node-external-ip = the tailnet address (group_vars/vps/main.yaml); without Tailscale up there
+      is no correct value for node-external-ip, and rendering an empty one would misconfigure a
+      fresh node. Bring tailscale up (the tailscale role runs before this one) or set
+      `k3s_node_external_ip` explicitly.
+
+# P4-02/P4-03: fresh host. The installer's first start reads config.yaml, so it has to exist first.
+- name: Render k3s config.yaml directly on a fresh host (the installer's first start reads it)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: "0644"
+  when: not k3s_config_stat.stat.exists
+
+# ANS-001 (2026-09-28): installing k3s at the pinned version, for a FRESH host.
+#
+# This role used to refuse outright when k3s was absent — deliberate, and it protected the live node,
+# but it also meant the documented rebuild path could not be automated: a fresh host could never get
+# past this role, so "Terraform + Ansible + ArgoCD rebuilds the cluster" was not true in practice.
+#
+# Installing is therefore now possible but **never implicit**: it requires `k3s_install_missing: true`
+# (default false). On the live node nothing changes, and a fresh build (DR-006 / recover-vm.md) is a
+# flag instead of a manual step.
+- name: Install k3s at the pinned version (fresh host, explicitly requested)
+  when:
+    - k3s_version_before.rc != 0
+    - k3s_install_missing | bool
+  block:
+    - name: Fetch the k3s installer
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /tmp/k3s-install.sh
+        mode: "0755"
+
+    - name: Run the installer pinned to {{ k3s_version }}
+      ansible.builtin.command:
+        cmd: /tmp/k3s-install.sh
+        creates: /usr/local/bin/k3s
+      environment:
+        # The pin is the whole point: an unpinned installer takes whatever is current, which would
+        # silently break the "k3s and Traefik versions are pinned and upgraded deliberately" property
+        # in docs/upgrade-policy.md — the bundled Traefik tracks the k3s release (ADR 0008), so an
+        # unplanned k3s bump is also an unplanned ingress upgrade.
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+      register: k3s_install
+
+    - name: Remove the installer script
+      ansible.builtin.file:
+        path: /tmp/k3s-install.sh
+        state: absent
+
+# Deliberately OUTSIDE the block above and unconditional: a skipped task still assigns its
+# `register`, and a skipped result carries no `rc`/`stdout` — which is how an earlier version of this
+# broke the assertions below with "object of type 'dict' has no attribute 'rc'".
+- name: Check installed k3s version (after any install attempt)
+  ansible.builtin.command: k3s --version
+  register: k3s_version_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to continue without k3s unless this run was explicitly allowed to install it
+  ansible.builtin.assert:
+    that:
+      - k3s_version_check.rc == 0 or (k3s_install_missing | bool)
+    fail_msg: >-
+      k3s is not installed and `k3s_install_missing` is false. This role manages the config of an
+      EXISTING install; setting k3s_install_missing=true is how a fresh host is built
+      (docs/runbooks/recover-vm.md). It stays false on the live node so that a config sync can never
+      install or upgrade anything.
+
+- name: Assert the installed version matches the pinned version (never silently upgrade/downgrade)
+  ansible.builtin.assert:
+    that:
+      - k3s_version in k3s_version_check.stdout
+    fail_msg: >-
+      Installed k3s version does not match the pinned {{ k3s_version }}. This role refuses to run
+      the k3s installer to "fix" that — a version change is a deliberate, separate maintenance
+      action (see docs/upgrade-policy.md), not something to do as a side effect of a config sync.
+  when: k3s_version_check.rc == 0
+
+# P4-02: existing host. Same template, but never at the live path — a running control plane reads it.
+- name: Render k3s config.yaml.pending (existing host — does NOT take effect until k3s restarts)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml.pending
+    mode: "0644"
+  when: k3s_config_stat.stat.exists
+  register: k3s_config_rendered
+  # `check_mode: false` so a `--check` run can actually tell whether the config differs: the diff
+  # probe below already runs for real under check mode (a read-only comparison), but it is useless if
+  # the file it compares against was never written. `.pending` is inert — nothing reads it — so
+  # writing it in check mode is the run's only side effect, which P4-02 names explicitly.
+  check_mode: false
+
+- name: Diff the pending config against the config.yaml already in use  # noqa: no-handler
+  ansible.builtin.command: diff -u /etc/rancher/k3s/config.yaml /etc/rancher/k3s/config.yaml.pending
+  register: k3s_config_diff
+  changed_when: false
+  failed_when: false
+  # `check_mode: false` because this is a read-only probe and check mode skips command tasks by
+  # default — which would leave `k3s_config_diff` undefined, so both the report and the
+  # apply-and-restart gate below would silently do nothing under `--check`. A check run that cannot
+  # tell you whether the config differs is not a check run.
+  check_mode: false
+  when: k3s_config_rendered is changed
+
+- name: Set kubelet image GC thresholds (informational — same file, applied in the same confirmed step)
+  ansible.builtin.debug:
+    msg: >-
+      config.yaml.pending includes kubelet-arg image-gc-high-threshold={{ k3s_kubelet_image_gc_high_threshold }}
+      and image-gc-low-threshold={{ k3s_kubelet_image_gc_low_threshold }}
+
+# P4-02: diff exits 0 (identical), 1 (differ), 2 (trouble — e.g. an unreadable file). Anything
+# non-zero is treated as "differs": the safe assumption when the comparison could not be completed.
+- name: Report whether the rendered config differs from what's live  # noqa: no-handler
+  ansible.builtin.debug:
+    msg: >-
+      /etc/rancher/k3s/config.yaml.pending DIFFERS from the live config (diff rc={{ k3s_config_diff.rc }}). To apply:
+      back up an etcd snapshot, move config.yaml.pending to config.yaml, remove the tailscale.conf
+      systemd drop-in, restart k3s in a maintenance window, then verify `kubectl get nodes` and all
+      ArgoCD Applications unchanged — or set `k3s_allow_restart=true` and let this role do exactly
+      that (see the block below). See README.md in this role.
+  when:
+    - k3s_config_diff is defined
+    - k3s_config_diff.rc | default(0) | int != 0
+
+# ANS-001: applying the rendered config is the only genuinely dangerous thing this role can do — it
+# restarts the control plane, and on a single-node cluster that is a brief total outage. So it is
+# opt-in (`k3s_allow_restart`, default false), it takes an etcd snapshot FIRST and refuses to proceed
+# if that fails (the review's rule: snapshot before touching k3s, always), and it is gated on the
+# rendered config actually DIFFERING from the live one — not merely on the template having been
+# written, which is what would otherwise restart k3s on every run.
+#
+# Validated in check mode on the live host (see the changelog): with the flag off it does nothing;
+# with the flag on and an unchanged config it is still skipped. The restart path itself has only been
+# exercised on the live node by hand (2026-09-28, the S3 cutover) — DR-006's throwaway server is where
+# it gets its real end-to-end validation.
+- name: Apply the rendered k3s config and restart k3s (explicit opt-in)
+  when:
+    - k3s_allow_restart | bool
+    - k3s_config_diff is defined
+    - k3s_config_diff.rc | default(0) | int != 0
+  block:
+    - name: Snapshot etcd before touching the control plane
+      ansible.builtin.command:
+        cmd: k3s etcd-snapshot save --name pre-config-{{ ansible_date_time.iso8601_basic_short }}
+      changed_when: true # a snapshot is taken every time this block runs, and the block is already gated
+
+    - name: Back up the live k3s config
+      ansible.builtin.copy:
+        remote_src: true
+        src: /etc/rancher/k3s/config.yaml
+        dest: /etc/rancher/k3s/config.yaml.bak-{{ ansible_date_time.iso8601_basic_short }}
+        mode: "0644"
+      failed_when: false # a fresh host has no config.yaml yet; the snapshot above is the real net
+
+    - name: Promote the pending config
+      ansible.builtin.command:
+        cmd: mv /etc/rancher/k3s/config.yaml.pending /etc/rancher/k3s/config.yaml
+      changed_when: true # the enclosing block only runs when the render differs from the live file
+
+    - name: Remove the legacy systemd drop-in if it is still present
+      ansible.builtin.file:
+        path: /etc/systemd/system/k3s.service.d/tailscale.conf
+        state: absent
+
+    # Deliberately a task rather than a handler, and deliberately unconditional rather than gated on the
+    # removal's changed status. The reload has to happen *before* the restart below, and handlers run at
+    # the end of the play — so a handler would restart k3s against a stale unit set. ansible-lint's
+    # no-handler rule asks for a handler here; the ordering is why it cannot be one. Within this block
+    # (opt-in, and only when the render differs) an unconditional reload costs nothing.
+    - name: Reload systemd before the restart
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+
+    - name: Wait for the API server to answer again
+      ansible.builtin.command:
+        cmd: k3s kubectl get --raw /readyz
+      register: k3s_ready
+      until: k3s_ready.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+      check_mode: false # a read-only probe; it must run for real even under --check

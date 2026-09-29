@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/cas-api=ghcr.io/upayanmazumder/cas-api:latest@sha256:c1e457d75d390edbfdb2461215df6c3144093c9d928a54b0e7a132e92d10c732

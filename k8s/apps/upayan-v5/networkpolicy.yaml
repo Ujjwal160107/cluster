@@ -1,0 +1,56 @@
+# S11: both api and app scale via the KEDA HTTP add-on -- see
+# ../cas-api/networkpolicy.yaml for the full explanation of why the
+# interceptor (not Traefik) is the source. Also allow same-namespace
+# traffic in case app calls api internally.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: upayan-v5-api
+  namespace: upayan-v5
+spec:
+  podSelector:
+    matchLabels:
+      app: upayan-v5-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: interceptor
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        - podSelector:
+            matchLabels:
+              app: upayan-v5-app
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: upayan-v5-app
+  namespace: upayan-v5
+spec:
+  podSelector:
+    matchLabels:
+      app: upayan-v5-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: interceptor
+      ports:
+        - protocol: TCP
+          port: 3000

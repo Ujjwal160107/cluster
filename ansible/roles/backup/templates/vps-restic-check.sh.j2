@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Managed by ansible/roles/backup — do not hand-edit on the host, edit the template and re-run.
+#
+# Weekly repository integrity check. `restic backup` only ever *writes*; it never reads data back, so
+# repository corruption stays invisible until the day someone needs a restore. This is the
+# counterweight (review §12.5).
+#
+# `restic check` alone verifies structure (indexes, packs, trees). `--read-data-subset=10%` actually
+# reads a tenth of the pack data back, which is what catches bit-rot; a full read every week is
+# unnecessary, and restic spreads the subset across runs by design.
+set -uo pipefail
+
+RESTIC_REPOSITORY="{{ backup_restic_repository | default('') }}"
+TEXTFILE_DIR="{{ backup_node_exporter_textfile_dir | default('/var/lib/node_exporter/textfile_collector') }}"
+
+if [ -z "$RESTIC_REPOSITORY" ]; then
+  echo "restic_repository not set — nothing to check (see roles/backup/README.md)" >&2
+  exit 0
+fi
+# `restic` is a child process: it needs this in the environment, not just as a shell variable.
+# RESTIC_PASSWORD arrives via the systemd EnvironmentFile ({{ backup_env_file }}), SOPS-rendered.
+export RESTIC_REPOSITORY
+
+rc=0
+echo "+ restic check"
+restic check || rc=1
+echo "+ restic check --read-data-subset=10%"
+restic check --read-data-subset=10% || rc=1
+
+# Only advance the metric on success: the alert is staleness-based, so a failing check must let the
+# timestamp age rather than pretend it passed.
+if [ "$rc" -eq 0 ]; then
+  mkdir -p "$TEXTFILE_DIR"
+  echo "vps_restic_check_last_success_timestamp $(date +%s)" > "$TEXTFILE_DIR/vps_restic_check.prom.$$"
+  mv "$TEXTFILE_DIR/vps_restic_check.prom.$$" "$TEXTFILE_DIR/vps_restic_check.prom"
+fi
+
+exit "$rc"

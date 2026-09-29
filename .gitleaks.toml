@@ -1,0 +1,39 @@
+# gitleaks configuration, shared by three scans (see .github/workflows/validate.yml and
+# .pre-commit-config.yaml):
+#   - CI, working tree:      gitleaks dir .
+#   - CI, git history:       gitleaks git   (the published repository only; see below)
+#   - pre-commit hook:       gitleaks git --pre-commit --staged   (the staged diff, locally)
+#
+# Why this exists: on 2026-09-28 a `private-key` finding turned out to be the private key of the
+# certificate the origin was actively serving, committed in plaintext on 2026-05-10 and unnoticed
+# for four and a half months. Deleting a file does not undo that; a scanner that runs on every push
+# does prevent the next one.
+#
+# History vs working tree: the *private* `vps` repository scans its working tree only — its history
+# still contains the pre-S5 plaintext Secret manifests and that key, so a history scan there cannot
+# pass until S5's credential rotation and the `git filter-repo` rewrite are complete (see
+# docs/runbooks/rotate-secrets.md). The *published* `cluster` repository was seeded with a single
+# fresh commit, so its history is scanned too, and there a clean result means something.
+
+# One custom rule, for the class SEC-002 closed on 2026-09-29: a Discord webhook URL is a credential
+# (anyone holding it can post to the channel), and it must live in SOPS, never in a provisioning file.
+# The built-in set does not know this shape. The regex is the one scripts/private/check-public-redaction.sh
+# already uses, so the two gates agree on what a webhook looks like.
+[[rules]]
+id = "discord-webhook-url"
+description = "Discord webhook URL (its token is a credential — SEC-002 keeps these in SOPS)"
+regex = '''discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+'''
+
+[extend]
+# Keep gitleaks' full built-in rule set.
+useDefault = true
+
+# The path allowlist that used to live here — `secrets\.sops\.yaml$` and `^\.sops\.yaml$` — is gone
+# (P5-03). It was written on the assumption that SOPS ciphertext would trip the entropy heuristics.
+# Measured on 2026-09-29, that is not true: `gitleaks dir` with `useDefault = true` and **no**
+# allowlist finds **no leaks** in this tree. So the allowlist was doing nothing except suppressing
+# findings, and its suppression covered exactly the files whose *name* claims to be encrypted — a
+# `secrets.sops.yaml` committed with plaintext values would have been skipped by the scanner. That is
+# the shape of a rule that hides the thing it exists to catch, so it went, and `scripts/check-secrets.sh`
+# now asserts the ciphertext itself (every `data`/`stringData` leaf must be `ENC[…]`) rather than
+# trusting a filename. Two gates, neither of them satisfied by naming.

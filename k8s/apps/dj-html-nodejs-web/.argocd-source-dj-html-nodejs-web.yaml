@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/devjourney/html-nodejs/web=ghcr.io/upayanmazumder/devjourney/html-nodejs/web:latest@sha256:a1dd4454bab3f3bca2e3cd1464b0cc90b34ebd2e4c8c27589972345be48a517b

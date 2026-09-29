@@ -1,0 +1,25 @@
+# CI-004: the same secret scan, locally, before a commit exists.
+#
+#   pipx install pre-commit   (or: uv tool install pre-commit)
+#   pre-commit install
+#
+# `gitleaks git` scans commits, which is the point: the working-tree scan CI also runs cannot see a secret
+# that was committed and then deleted. The version is pinned to match CI so a local pass means the same
+# thing it does there, and `--redact` keeps a finding from printing the value it found.
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks-history
+        name: gitleaks (staged changes)
+        # P5-03: `git --pre-commit --staged` scans **the staged diff**, which is what a pre-commit hook
+        # should mean. The previous invocation scanned the whole history (`gitleaks git /repo`), which
+        # on a large tree costs seconds-to-minutes on every commit, and — because this repository's
+        # history still contains the pre-S5 plaintext manifests — could not pass here at all. A hook
+        # that always fails is a hook everyone disables, and then it protects nothing.
+        #
+        # The history scan still exists and still runs: it is a CI job in the published repository
+        # (`.github/workflows/validate.yml`), where the history it checks is the clean one.
+        entry: docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 git --pre-commit --staged --config /repo/.gitleaks.toml --redact --no-banner
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -1,0 +1,55 @@
+# Values to use with `helm template hetzner/hcloud-csi -f values.yaml`
+
+# No secretName here: the chart hardcodes the Secret it reads. Its controller mounts a secretKeyRef
+# named `hcloud` (key `token`), and the value that used to sit here (`hcloud-csi`) was inert — a
+# re-render with and without it produces an identical manifest, which is how that was established.
+# The Secret this repo declares is therefore named `hcloud`; see secrets.sops.yaml.
+controller:
+  enabled: true
+  replicas: 1
+  resources:
+    csiAttacher:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 50m, memory: 64Mi }
+    csiResizer:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 50m, memory: 64Mi }
+    csiProvisioner:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 50m, memory: 64Mi }
+    livenessProbe:
+      requests: { cpu: 5m, memory: 16Mi }
+      limits: { cpu: 30m, memory: 32Mi }
+    hcloudCSIDriver:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { cpu: 100m, memory: 128Mi }
+node:
+  enabled: true
+  resources:
+    csiNodeDriverRegistrar:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { cpu: 50m, memory: 64Mi }
+    livenessProbe:
+      requests: { cpu: 5m, memory: 16Mi }
+      limits: { cpu: 30m, memory: 32Mi }
+    hcloudCSIDriver:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { cpu: 150m, memory: 128Mi }
+
+# RBAC settings (chart default usually creates RBAC resources)
+rbac:
+  create: true
+
+# StorageClass this chart creates.
+#
+# `defaultStorageClass: false` deliberately, because `local-path` is the cluster default: every PVC
+# in this repo either names its class or expects local-path, and with both classes annotated default a
+# PVC that omits storageClassName is placed nondeterministically — while hcloud-volumes provisions
+# billed Hetzner volumes through a provisioner that is being retired (see docs/storage.md / S8).
+# The key is `defaultStorageClass`, not `default`; verified against the chart's own values for 2.20.0.
+storageClasses:
+  - name: hcloud-volumes
+    defaultStorageClass: false
+    reclaimPolicy: Delete
+
+# tune other options here if needed (driver settings, etc.)

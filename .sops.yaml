@@ -1,0 +1,30 @@
+# SOPS encryption rules for this repo. See docs/secrets.md for the full design.
+#
+# Two age recipients — either key can decrypt:
+#   1. age-ops     — owner's workstation key: the offline age key, plus an offline copy in the
+#                    owner's password manager. Its location is deliberately not written here —
+#                    this repo is published, and sops finds the key by default anyway. NEVER committed.
+#   2. age-cluster — installed once as the `argocd/sops-age` Secret so ArgoCD's
+#                    repo-server (ksops/helm-secrets) can decrypt in-cluster
+#                    without needing a human present. NEVER committed.
+#
+# Losing both private keys means losing every git-held secret (etcd snapshots of
+# the live Secret objects remain a last resort — see docs/backups.md).
+keys:
+  - &age_recipients >-
+    age1c5wsguw34gmnnllle8qzcjvjkl22e88em3a0lseqs0l9lscmr5pqsg6gyn,
+    age13yvwrz6cvg8cwq78m6jvy9mndjdyuv0k3kh0du72v28puqcuafms8p28gr
+
+creation_rules:
+  # Kubernetes Secret manifests consumed by ksops: only data/stringData values are
+  # encrypted, so kind/apiVersion/metadata stay readable/diffable in git.
+  - path_regex: k8s/.*secrets\.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    age: *age_recipients
+  # Ansible secrets consumed via the community.sops vars plugin: full-value encryption
+  # (the whole YAML document is one variables file, not a K8s manifest).
+  - path_regex: ansible/.*secrets\.sops\.ya?ml$
+    age: *age_recipients
+  # Terraform secrets, consumed via `sops exec-env`: full-value encryption.
+  - path_regex: terraform/secrets\.enc\.env$
+    age: *age_recipients

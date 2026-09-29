@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the vps-backup restore drill monthly
+
+[Timer]
+# 1st of the month, 05:00 UTC — well clear of the weekly check and the Monday prune.
+OnCalendar=*-*-01 05:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

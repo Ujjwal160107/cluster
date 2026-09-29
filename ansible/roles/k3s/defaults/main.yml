@@ -1,0 +1,16 @@
+---
+# P4-03 (2026-09-29): the k3s node addresses are derived from the host, not frozen in group_vars.
+#
+# The live mapping (verified 2026-09-27 via `systemctl cat k3s` and the rendered
+# /etc/rancher/k3s/config.yaml) is node-ip = the host's primary/public IPv4 and node-external-ip =
+# the tailnet address. Both are reproduced here without a per-host literal:
+#
+#   k3s_node_ip          = ansible_default_ipv4.address (the address on the default route; on this
+#                          host that is 138.201.157.147, because the default route is via eth0);
+#   k3s_node_external_ip = the tailnet address, read in tasks/main.yml after the tailscale role ran.
+#
+# Both remain overridable (`-e k3s_node_ip=…`) for a host whose default route is not the address to
+# advertise. No SAN change and no k3s restart is implied by this: the rendered config.yaml is
+# byte-identical to the live one.
+k3s_node_ip: "{{ ansible_default_ipv4.address }}"
+k3s_node_external_ip: "{{ k3s_tailscale_ip.stdout_lines[0] if (k3s_tailscale_ip.stdout_lines | default([]) | length) > 0 else '' }}"

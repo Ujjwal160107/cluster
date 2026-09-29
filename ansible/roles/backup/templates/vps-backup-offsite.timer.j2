@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the vps-backup offsite copy (restic copy to Cloudflare R2)
+
+[Timer]
+# 15 min after boot, then hourly. The copy is incremental — only the packs the destination lacks
+# move — so a run's cost is dominated by listing both repositories, and R2 lists are the free tier's
+# thinnest margin (1M Class A operations/month, docs/backups.md). Hourly is deliberately conservative
+# and stays clear of the class-A backup's 30-minute cadence; tighten it once the real operation counts
+# have been measured over a few days, as docs/backups.md already asks. It also bounds the offsite
+# restore point at roughly an hour behind the local repository.
+OnBootSec=15min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

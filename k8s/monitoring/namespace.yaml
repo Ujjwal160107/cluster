@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: monitoring
+  # S11: Prometheus, Loki and Grafana need hostPath volumes for their TSDBs,
+  # and Prometheus/node-exporter need host networking -- all Baseline
+  # violations. Made explicit rather than left unlabelled so the intent is
+  # recorded; an unlabelled namespace behaves identically (privileged).
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged

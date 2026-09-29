@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dj-html-nodejs-web
+  labels:
+    app: dj-html-nodejs-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dj-html-nodejs-web
+  template:
+    metadata:
+      labels:
+        app: dj-html-nodejs-web
+    spec:
+      priorityClassName: low-priority
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      containers:
+        - name: dj-html-nodejs-web
+          image: ghcr.io/upayanmazumder/devjourney/html-nodejs/web:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi

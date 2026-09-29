@@ -1,0 +1,8 @@
+# Normalize all text files to LF in the repository and working tree.
+* text=auto eol=lf
+
+# Force LF for files that must not have CRLF (YAML/JSON parsers, shell scripts)
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.sh    text eol=lf

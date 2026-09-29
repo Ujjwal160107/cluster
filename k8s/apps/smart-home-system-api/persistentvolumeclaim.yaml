@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smart-home-system-pvc
+spec:
+  # CLEAN-004 / D-3 (2026-09-28, owner decision): the low-importance apps share the default
+  # `local-path` pool instead of each getting their own volume.
+  #
+  # Naming the class EXPLICITLY is the actual fix. This manifest used to omit `storageClassName` and
+  # rely on the default class — and when both `hcloud-volumes` and `local-path` carried the default
+  # annotation, the binding was a coin flip. This PVC lost that coin flip and got a Hetzner volume;
+  # the volume was later deleted, so the app could never scale up again (FailedAttachVolume on every
+  # start). An explicit class means that can never recur.
+  #
+  # Accepted consequence, recorded because the decision was made with it in view: `local-path` lives
+  # on the ROOT disk, so this data does not survive losing the node and is not covered by the class-A
+  # restic targets. That is the intended trade for a class C app whose criticality the owner classified
+  # as "none" — and whose previous backing store was already gone.
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

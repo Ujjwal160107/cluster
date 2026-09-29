@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      scrape_timeout: 10s
+
+    scrape_configs:
+      - job_name: "prometheus"
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      - job_name: "kubernetes-nodes"
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: __address__
+            regex: "(.*):10250"
+            replacement: "${1}:10250"
+
+      - job_name: "metrics-server"
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+            action: keep
+            regex: metrics-server
+          - source_labels: [__meta_kubernetes_service_namespace]
+            action: keep
+            regex: kube-system
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: https-metrics
+
+      - job_name: "kube-state-metrics"
+        static_configs:
+          - targets: ["kube-state-metrics.monitoring.svc.cluster.local:8080"]
+
+      - job_name: "node-exporter"
+        static_configs:
+          - targets: ["node-exporter.monitoring.svc.cluster.local:9100"]
+
+      - job_name: "kubernetes-pods"
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          # Only scrape pods opted-in with prometheus.io/scrape: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+
+      - job_name: "argocd"
+        static_configs:
+          - targets:
+              - "argocd-metrics.argocd.svc.cluster.local:8082"
+              - "argocd-server-metrics.argocd.svc.cluster.local:8083"
+              - "argocd-repo-server.argocd.svc.cluster.local:8084"
+
+      - job_name: "kubernetes-cadvisor"
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - target_label: __metrics_path__
+            replacement: /metrics/cadvisor
+        # Keep only the metrics used by dashboards — cAdvisor emits hundreds
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_rss"
+            action: keep
+          # Drop pause containers and the root cgroup (empty container label)
+          - source_labels: [container]
+            regex: "POD|"
+            action: drop
+
+      # Loki's own metrics. Without this there is nothing to alert on if log shipping stops —
+      # which is the state this was found in (zero loki_ series in Prometheus on 2026-09-28).
+      - job_name: "loki"
+        static_configs:
+          - targets: ["loki.monitoring.svc.cluster.local:3100"]
+
+      # Traefik's metrics entrypoint (k8s/platform/traefik/traefik-config.yaml enables it, 9100).
+      # This is the only ingress-level visibility the cluster has: request rates, error codes and
+      # latency per router/service, rather than inferring "is the site up" from app logs.
+      - job_name: "traefik"
+        static_configs:
+          - targets: ["traefik.kube-system.svc.cluster.local:9100"]
+

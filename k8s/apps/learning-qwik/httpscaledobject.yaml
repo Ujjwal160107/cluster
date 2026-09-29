@@ -1,0 +1,15 @@
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: learning-qwik
+spec:
+  hosts:
+    - qwik.dj.upayan.dev
+  scaleTargetRef:
+    name: learning-qwik
+    service: learning-qwik
+    port: 3000
+  replicas:
+    min: 0
+    max: 1
+  scaledownPeriod: 300

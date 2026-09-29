@@ -1,0 +1,15 @@
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: cas-api
+spec:
+  hosts:
+    - api-cas.upayan.dev
+  scaleTargetRef:
+    name: cas-api
+    service: cas-api
+    port: 4000
+  replicas:
+    min: 0
+    max: 1
+  scaledownPeriod: 300

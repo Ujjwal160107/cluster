@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: upayan-v5
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    argocd-image-updater.argoproj.io/image-list: "app=ghcr.io/upayanmazumder/upayan.dev/app,api=ghcr.io/upayanmazumder/upayan.dev/api"
+    argocd-image-updater.argoproj.io/app.update-strategy: semver
+    argocd-image-updater.argoproj.io/app.allow-tags: "regexp:^v[0-9]+$"
+    argocd-image-updater.argoproj.io/api.update-strategy: semver
+    argocd-image-updater.argoproj.io/api.allow-tags: "regexp:^v[0-9]+$"
+    argocd-image-updater.argoproj.io/write-back-method: "git:secret:argocd/git-creds"
+    argocd-image-updater.argoproj.io/git-branch: main
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/upayanmazumder/vps
+    targetRevision: main
+    path: k8s/apps/upayan-v5
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: upayan-v5
+  ignoreDifferences:
+    # upayan-v5-app and upayan-v5-api scale 0<->1 via the KEDA HTTP add-on.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

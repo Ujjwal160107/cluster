@@ -1,0 +1,51 @@
+---
+# Creates the sudo admin user and its SSH key. Root stays key-only-login (`PermitRootLogin
+# without-password`, already the case today) until this user is proven — the actual
+# `PermitRootLogin no` cutover is a SEPARATE, explicitly confirmed step (see README.md in this
+# role), not part of this task file, because it changes the only login path this session used to
+# even reach the host.
+#
+# P4-06 (2026-09-29): the whole role is gated behind `admin_user_enabled` (default false, see
+# defaults/main.yml) until P7-N5 executes the cutover. Creating a NOPASSWD-sudo user is an access
+# change that the node does not need yet, and in `--check` mode the ungated role failed outright:
+# check mode does not create the user, so "Authorize the admin SSH key" had no user to key. With
+# the gate off the live host and every check run converge without touching it.
+
+- name: Create and authorize the admin user
+  when: admin_user_enabled | bool
+  block:
+    - name: Fail fast if no SSH public key was supplied
+      ansible.builtin.assert:
+        that:
+          - admin_ssh_public_key is defined
+          - admin_ssh_public_key | length > 0
+        fail_msg: >-
+          admin_ssh_public_key is empty — set it via group_vars/vps/secrets.sops.yaml (once S5 exists)
+          or -e admin_ssh_public_key="ssh-ed25519 AAAA...". Refusing to create a sudo user with no key.
+
+    - name: Create the admin user
+      ansible.builtin.user:
+        name: "{{ admin_username }}"
+        shell: /bin/bash
+        groups: sudo
+        append: true
+        create_home: true
+
+    - name: Authorize the admin SSH key
+      ansible.posix.authorized_key:
+        user: "{{ admin_username }}"
+        key: "{{ admin_ssh_public_key }}"
+        state: present
+
+    - name: Passwordless sudo for the admin user
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ admin_username }}"
+        content: "{{ admin_username }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+# NOT included here (separate, explicitly confirmed step per the S3 brief):
+#   - `PermitRootLogin no` in sshd_config — only after logging in as {{ admin_username }} is
+#     proven from a fresh session, not the one that applied this role.
+#   - a strong root password for the Hetzner console break-glass path (owner sets this manually
+#     via the console, never over SSH, never committed).

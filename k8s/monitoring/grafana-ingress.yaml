@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-ingress
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  # S7: no `tls:` block. Traefik terminates with its default certificate (the
+  # Cloudflare Origin CA wildcard via the TLSStore in k8s/platform/traefik/,
+  # whose SAN covers *.upayan.dev). Removing this block also stops
+  # cert-manager's ingress-shim creating the `Certificate/grafana-tls` it used
+  # to own, which is what makes cert-manager removable -- this was its last
+  # user.
+  rules:
+    - host: grafana.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 80

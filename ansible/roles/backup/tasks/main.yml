@@ -1,0 +1,220 @@
+---
+# Deploys the backup scripts, systemd units, and the targets registry. Deliberately does NOT run
+# `restic init` — that's a one-time, explicitly confirmed step (see README.md in this role) because
+# running it against the wrong path or a non-empty path is exactly the kind of mistake the
+# architecture brief's confirmation gates exist to prevent.
+
+- name: Install restic and jq/yq (dump-filtering dependencies)
+  ansible.builtin.apt:
+    name:
+      # ANS-004: restic is pinned, jq/sqlite3 are not. restic *writes* the backup repository, so its
+      # version is part of the data's provenance — an unattended upgrade changes the format the
+      # snapshots are written in, and a restic too old to read a newer repo is exactly the failure a
+      # restore would hit. Bump `restic_version` deliberately, then re-run the restore drill
+      # (`vps-restore-test`) before trusting the new version. jq/sqlite3 only post-process dumps and
+      # have no on-disk format of ours, so they stay on the distro's security-updated version on
+      # purpose — pinning them to a point release would start failing the moment Ubuntu supersedes it.
+      - "restic={{ restic_version }}"
+      - jq
+      - sqlite3 # for the `sqlite:` pre-copy in vps-backup.sh (Grafana's database)
+    state: present
+    update_cache: true
+
+- name: Check whether yq (mikefarah, Go binary) is already installed
+  ansible.builtin.command: yq --version
+  register: backup_yq_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install yq (mikefarah's Go yq — the apt package is a different, incompatible tool)
+  when: backup_yq_check.rc != 0
+  ansible.builtin.get_url:
+    url: "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
+    dest: /usr/local/bin/yq
+    mode: "0755"
+    checksum: "sha256:a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7" # verified by downloading and hashing the release directly, 2026-09-28
+
+- name: Ensure /etc/vps-backup exists
+  ansible.builtin.file:
+    path: /etc/vps-backup
+    state: directory
+    mode: "0750"
+
+- name: Deploy the backup-targets registry
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/files/backup-targets.yaml"
+    dest: "{{ backup_targets_path }}"
+    mode: "0640"
+
+- name: Deploy vps-backup.sh
+  ansible.builtin.template:
+    src: vps-backup.sh.j2
+    dest: /usr/local/sbin/vps-backup.sh
+    mode: "0750"
+
+- name: Deploy vps-etcd-snapshot.sh
+  ansible.builtin.template:
+    src: vps-etcd-snapshot.sh.j2
+    dest: /usr/local/sbin/vps-etcd-snapshot.sh
+    mode: "0750"
+
+- name: Deploy per-class backup service units
+  ansible.builtin.template:
+    src: vps-backup.service.j2
+    dest: "/etc/systemd/system/vps-backup-class{{ item }}.service"
+    mode: "0644"
+  vars:
+    backup_class: "{{ item }}"
+  loop:
+    - A
+    - C
+
+- name: Deploy per-class backup timer units
+  ansible.builtin.template:
+    src: vps-backup.timer.j2
+    dest: "/etc/systemd/system/vps-backup-class{{ item }}.timer"
+    mode: "0644"
+  vars:
+    backup_class: "{{ item }}"
+  loop:
+    - A
+    - C
+
+- name: Deploy the etcd-snapshot service + timer units
+  ansible.builtin.template:
+    src: "vps-etcd-snapshot.{{ item }}.j2"
+    dest: "/etc/systemd/system/vps-etcd-snapshot.{{ item }}"
+    mode: "0644"
+  loop:
+    - service
+    - timer
+
+- name: Deploy vps-backup-prune.sh
+  ansible.builtin.template:
+    src: vps-backup-prune.sh.j2
+    dest: "{{ backup_prune_script_path }}"
+    mode: "0750"
+
+- name: Deploy the weekly retention service + timer units
+  ansible.builtin.template:
+    src: "vps-backup-prune.{{ item }}.j2"
+    dest: "/etc/systemd/system/vps-backup-prune.{{ item }}"
+    mode: "0644"
+  loop:
+    - service
+    - timer
+
+- name: Assert the restic password decrypted (fail loudly instead of writing ciphertext)
+  # Ran the playbook from the repo root on 2026-09-28 and this silently broke every backup: Ansible
+  # reads ansible/ansible.cfg — the file that enables community.sops' vars plugin — only when the
+  # working directory IS ansible/. From anywhere else the var stays `ENC[AES256_GCM,…]` ciphertext,
+  # and the render task would happily write that in as the repository password. The failure then
+  # looks like `Fatal: wrong password or no key found` from restic, minutes later, with no clue why.
+  ansible.builtin.assert:
+    that:
+      - restic_password | default('') | length > 0
+      - not (restic_password | default('') is match('^ENC\\['))
+    fail_msg: >-
+      restic_password is empty or still SOPS ciphertext. Run the playbook from the ansible/ directory
+      (or pass SOPS_AGE_KEY_FILE) so ansible/ansible.cfg is loaded and community.sops can decrypt.
+  no_log: true
+  when: restic_password is defined
+
+- name: Render the restic environment file from SOPS-encrypted group vars
+  # Skipped (rather than failing) until S4's credentials exist: `backup_restic_repository` empty and
+  # no secret means the backup script degrades to "dump only, skip restic" (its own RESTIC_REPOSITORY
+  # check), which is the documented pre-R2 state.
+  when: restic_password | default('') | length > 0
+  ansible.builtin.copy:
+    content: |
+      # Managed by ansible/roles/backup — render source is group_vars/vps/secrets.sops.yaml
+      # (SOPS-encrypted; decrypted in-flight by the community.sops vars plugin).
+      # Do not hand-edit on the host: edit the encrypted vars and re-run the backup role.
+      RESTIC_PASSWORD={{ restic_password }}
+    dest: "{{ backup_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Deploy vps-restic-check.sh
+  ansible.builtin.template:
+    src: vps-restic-check.sh.j2
+    dest: "{{ backup_check_script_path }}"
+    mode: "0750"
+
+- name: Deploy vps-restore-test.sh
+  ansible.builtin.template:
+    src: vps-restore-test.sh.j2
+    dest: "{{ backup_restore_test_script_path }}"
+    mode: "0750"
+
+- name: Deploy the weekly integrity-check service + timer units
+  ansible.builtin.template:
+    src: "vps-restic-check.{{ item }}.j2"
+    dest: "/etc/systemd/system/vps-restic-check.{{ item }}"
+    mode: "0644"
+  loop:
+    - service
+    - timer
+
+- name: Deploy the monthly restore-drill service + timer units (class A)
+  ansible.builtin.template:
+    src: "vps-restore-test.{{ item }}.j2"
+    dest: "/etc/systemd/system/vps-restore-test.{{ item }}"
+    mode: "0644"
+  loop:
+    - service
+    - timer
+
+- name: Deploy the monthly class-C restore-drill service + timer units (DR-004)
+  ansible.builtin.template:
+    src: "vps-restore-test-c.{{ item }}.j2"
+    dest: "/etc/systemd/system/vps-restore-test-c.{{ item }}"
+    mode: "0644"
+  loop:
+    - service
+    - timer
+
+- name: Deploy vps-backup-offsite.sh (DR-001, restic copy to R2)
+  ansible.builtin.template:
+    src: vps-backup-offsite.sh.j2
+    dest: "{{ backup_offsite_script_path }}"
+    mode: "0750"
+
+- name: Deploy the offsite-copy service + timer units (DR-001, R2)
+  # Deployed, like every other unit here, but not enabled — `systemctl enable --now` stays the
+  # operator's confirmed step. Deliberately does NOT create {{ backup_offsite_env_file }}: the R2
+  # credentials are host-local by design and never pass through this repo (README.md). The unit's
+  # `EnvironmentFile=-` is non-fatal, so until that file exists the script's own "no destination"
+  # check exits 0 and writes nothing.
+  ansible.builtin.template:
+    src: "vps-backup-offsite.{{ item }}.j2"
+    dest: "/etc/systemd/system/vps-backup-offsite.{{ item }}"
+    mode: "0644"
+  loop:
+    - service
+    - timer
+
+- name: Reload systemd (picks up new/changed units, does not start anything)
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Deliberately NOT included in this role yet (S4 still incomplete without them — see README.md):
+#   - enabling/starting the timers (depends on `restic init` having run — a separate, confirmed step)
+#   - the R2 bucket-lock-tolerance validation from the review §12.7 (only relevant once the repo
+#     lives in R2)
+#   - enabling/starting any timer: that remains a deliberate, confirmed step
+#   - creating {{ backup_offsite_env_file }}: the R2 credentials are host-local by design and must not
+#     pass through Ansible, SOPS or git (DR-001; README.md)
+#
+# Added 2026-09-28: the weekly `vps-backup-prune` units and the SOPS-rendered restic env file. Without
+# a prune the repository only grows, so timers must not be enabled without it.
+# Added 2026-09-28 (later): `vps-restic-check` (weekly integrity + 10% data read), `vps-restore-test`
+# (monthly end-to-end drill), and pushing etcd snapshots plus the k3s token/TLS to restic from
+# vps-etcd-snapshot.sh.
+# Added 2026-09-29: the DR-001 offsite leg — `vps-backup-offsite.sh` (+ service/timer, hourly), a
+# `restic copy` of all tags from the local repository into the R2 `vps-backups` repository. Deployed
+# and no-op until a destination is configured; the R2 credentials do not exist yet, so nothing here
+# ran against the host.

@@ -1,0 +1,25 @@
+---
+- name: Configure the vps host
+  hosts: vps
+  become: false # SSH as root today; flips to `become: true` + non-root ansible_user once
+                # admin_user is proven and root SSH login is disabled (see roles/admin_user/README.md)
+  gather_facts: true
+
+  # P4-06 (2026-09-29): every role carries its own name as a tag, so a targeted run is possible
+  # without --start-at-task (which silently skips everything before the named task). The tags are
+  # the role names, plus `host_firewall` reserved for P7-N6's new nftables role — that role does not
+  # exist yet, so a tag cannot reference it; it is added here when the role lands.
+  roles:
+    - role: base
+      tags: [base]
+    - role: admin_user
+      tags: [admin_user]
+    - role: tailscale
+      tags: [tailscale]
+    - role: k3s
+      tags: [k3s]
+    - role: backup     # S4 — deploys backup scripts/timers, does NOT run `restic init`
+                       # or enable timers (see roles/backup/README.md and the review §17 S4)
+      tags: [backup]
+    - role: data_volume # S8 — mounts vps-data at /srv/data, refuses to mkfs (applied 2026-09-28)
+      tags: [data_volume]

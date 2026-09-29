@@ -1,0 +1,373 @@
+# Port registry for the `vps` cluster (Hetzner DE, 138.201.157.147).
+#
+# Source of truth for every port that is (or was, or will be) reachable from outside the pod
+# network. Cross-checked by `scripts/check-ports.py`, which fails CI if:
+#   - two entries share the same (port, proto, scope), or
+#   - a NodePort/LoadBalancer Service or hostPort in k8s/ has no matching entry here.
+#
+# `status` values:
+#   live    — reachable today, matches current-state review (docs/plans/2026-09-27-architecture-review.md §4)
+#   target  — reachable in the S6-final firewall state, not yet applied
+#   remove  — reachable today, scheduled for removal (duplicate/unmanaged path)
+#
+# `scope`: internal (pod/cluster network only) | tailnet (Tailscale-only) | public (open internet)
+#
+# Last verified live: 2026-09-27 (ss -Hltnp on the node + external TCP probe from workstation).
+# See docs/ports.md for the human-readable render and docs/networking.md for the firewall layers.
+
+- port: 22
+  proto: tcp
+  service: sshd
+  k8s_service: null
+  namespace: null
+  owner: upayan
+  scope: public
+  status: remove
+  reason: "key-only root SSH; target state moves admin access to Tailscale only (S3/S6)"
+  firewall_rule: none (no Hetzner Cloud Firewall exists yet)
+  ingress: direct
+  auth: ssh key (root only)
+  temporary: false
+  expires: null
+
+- port: 22
+  proto: tcp
+  service: sshd
+  k8s_service: null
+  namespace: null
+  owner: upayan
+  scope: tailnet
+  status: target
+  reason: "S6 target: SSH reachable only via tailnet (100.96.250.81), public 22 closed by the Hetzner firewall"
+  firewall_rule: "vps firewall: no public rule for 22 (tailnet reaches the host directly over the tailscale0 interface)"
+  ingress: direct
+  auth: ssh key (admin_user, then root disabled)
+  temporary: false
+  expires: null
+
+- port: 80
+  proto: tcp
+  service: traefik (k3s-bundled)
+  k8s_service: kube-system/traefik
+  namespace: kube-system
+  owner: platform
+  scope: public
+  status: live
+  reason: "HTTP entrypoint; Cloudflare-proxied for every *.upayan.dev host, permanent redirect to 443 planned (S7)"
+  firewall_rule: "target (S6): tcp 80 from Cloudflare IPv4+IPv6 ranges only"
+  ingress: "ServiceLB (svclb-traefik) binds host 80"
+  auth: per-app
+  temporary: false
+  expires: null
+
+- port: 443
+  proto: tcp
+  service: traefik (k3s-bundled)
+  k8s_service: kube-system/traefik
+  namespace: kube-system
+  owner: platform
+  scope: public
+  status: live
+  reason: "HTTPS entrypoint for every *.upayan.dev host"
+  firewall_rule: "target (S6): tcp 443 from Cloudflare IPv4+IPv6 ranges only"
+  ingress: "ServiceLB (svclb-traefik) binds host 443"
+  auth: per-app
+  temporary: false
+  expires: null
+
+- port: 5432
+  proto: tcp
+  service: vcap-dev postgres (legacy public path)
+  k8s_service: traefik postgres-dev IngressRouteTCP (k8s/apps/vcap/edge/dev)
+  namespace: vcap-dev
+  owner: upayan (app owner), vcap devs (consumers)
+  scope: public
+  status: closed
+  reason: "**Closed.** The unmanaged NodePort duplicate was deleted 2026-09-29 (P1-05) and the tenant chart's own same-namespace NetworkPolicy (2026-09-28) blocks the Traefik path, so this port serves nothing today. It is not the target port and must not reopen — the public path is the one below."
+  firewall_rule: none today (no 5432 rule is intended)
+  ingress: "traefik postgres-dev TCP entrypoint"
+  auth: "scram, app superuser only — not an acceptable state to expose"
+  temporary: false
+  expires: "never reopens; superseded by 15432"
+
+
+- port: 15432
+  proto: tcp
+  service: vcap-dev postgres (target public path)
+  k8s_service: vcap-backend-dev-postgres:5432, behind Traefik with TLS termination
+  namespace: vcap-dev
+  owner: upayan (app owner), vcap devs (consumers)
+  scope: public — **NOT OPEN YET**
+  status: not-open
+  reason: "Owner decision OD-1: the public path is 15432, not 5432 — a non-default port is defence against mass scanning, not a security control on its own. It stays closed until ALL of: TLS at Traefik with a private-CA leaf (sslmode=verify-ca), a non-superuser vcap_app role, pg_hba that rejects network superuser logins, per-person non-superuser roles, the cluster-owned additive ingress NetworkPolicy, and auth-failure alerting — AND the VCAP team accepts the chart-side pg_hba/role change (OD-16). Today both instances are ssl=off and the only login role is a superuser."
+  firewall_rule: "target (P7-N7): tcp 15432 from 0.0.0.0/0 and ::/0 — NO such rule exists today"
+  ingress: "Traefik vcap-pg-dev entrypoint (P7-N7) -> IngressRouteTCP with tls.secretName"
+  auth: "TLS required (sslmode=verify-ca) + scram, per-person non-superuser roles"
+  temporary: false
+  expires: null
+
+
+- port: 5433
+  proto: tcp
+  service: vcap-staging postgres (legacy public path)
+  k8s_service: traefik postgres-staging IngressRouteTCP (k8s/apps/vcap/edge/staging)
+  namespace: vcap-staging
+  owner: upayan (app owner), vcap devs (consumers)
+  scope: public
+  status: closed
+  reason: "**Closed.** The unmanaged NodePort duplicate was deleted 2026-09-29 (P1-05) and the tenant chart's own same-namespace NetworkPolicy (2026-09-28) blocks the Traefik path, so this port serves nothing today. It is not the target port and must not reopen — the public path is the one below."
+  firewall_rule: none today (no 5433 rule is intended)
+  ingress: "traefik postgres-staging TCP entrypoint"
+  auth: "scram, app superuser only — not an acceptable state to expose"
+  temporary: false
+  expires: "never reopens; superseded by 15433"
+
+
+- port: 15433
+  proto: tcp
+  service: vcap-staging postgres (target public path, holds real student data)
+  k8s_service: vcap-backend-staging-postgres:5432, behind Traefik with TLS termination
+  namespace: vcap-staging
+  owner: upayan (app owner), vcap devs (consumers)
+  scope: public — **NOT OPEN YET**
+  status: not-open
+  reason: "Same contract as 15432 (OD-1), and additionally gated on the VCAP team's acceptance of the pg_hba/non-superuser change (OD-16) because this instance holds class A student data. Nothing about it may open before the 15432 path has been exercised first."
+  firewall_rule: "target (P7-N7): tcp 15433 from 0.0.0.0/0 and ::/0 — NO such rule exists today"
+  ingress: "Traefik vcap-pg-staging entrypoint (P7-N7) -> IngressRouteTCP with tls.secretName"
+  auth: "TLS required (sslmode=verify-ca) + scram, per-person non-superuser roles"
+  temporary: false
+  expires: null
+
+
+- port: 30532
+  proto: tcp
+  service: vcap-staging postgres (duplicate NodePort path)
+  k8s_service: vcap-backend-staging-postgres-external
+  namespace: vcap-staging
+  owner: unowned (kubectl-applied, not in git)
+  scope: public
+  status: removed
+  reason: "duplicate exposure of the same DB as 5433 via kube-proxy NodePort; not managed by any manifest"
+  firewall_rule: none today
+  ingress: NodePort
+  auth: scram
+  temporary: true
+  expires: "deleted 2026-09-29 (P1-05 / OD-3); it was never in any manifest"
+
+
+
+- port: 30533
+  proto: tcp
+  service: vcap-dev postgres (duplicate NodePort path)
+  k8s_service: vcap-backend-dev-postgres-external
+  namespace: vcap-dev
+  owner: unowned (kubectl-applied, not in git)
+  scope: public
+  status: removed
+  reason: "duplicate exposure of the same DB as 5432 via kube-proxy NodePort; not managed by any manifest"
+  firewall_rule: none today
+  ingress: NodePort
+  auth: scram
+  temporary: true
+  expires: "deleted 2026-09-29 (P1-05 / OD-3); it was never in any manifest"
+
+
+
+- port: 30843
+  proto: tcp
+  service: traefik LoadBalancer NodePort (web)
+  k8s_service: kube-system/traefik
+  namespace: kube-system
+  owner: platform
+  scope: public
+  status: remove
+  reason: "kube-proxy auto-allocates a NodePort for every LoadBalancer Service; duplicates 80, no separate purpose"
+  firewall_rule: "target (S6): closed (not in the allow-list)"
+  ingress: NodePort (auto-allocated)
+  auth: n/a
+  temporary: false
+  expires: "closed by firewall at S6 (NodePort itself is not removable while ServiceLB is in use)"
+
+- port: 30851
+  proto: tcp
+  service: traefik LoadBalancer NodePort (websecure)
+  k8s_service: kube-system/traefik
+  namespace: kube-system
+  owner: platform
+  scope: public
+  status: remove
+  reason: "duplicates 443, kube-proxy auto-allocated"
+  firewall_rule: "target (S6): closed (not in the allow-list)"
+  ingress: NodePort (auto-allocated)
+  auth: n/a
+  temporary: false
+  expires: "closed by firewall at S6"
+
+- port: 32301
+  proto: tcp
+  service: traefik LoadBalancer NodePort (postgres-dev)
+  k8s_service: kube-system/traefik
+  namespace: kube-system
+  owner: platform
+  scope: public
+  status: removed
+  reason: "duplicates 5432 via the Traefik TCP entrypoint path, kube-proxy auto-allocated"
+  firewall_rule: "target (S6): closed"
+  ingress: NodePort (auto-allocated)
+  auth: n/a
+  temporary: false
+  expires: "deleted 2026-09-29 (P1-05 / OD-3); it was never in any manifest"
+
+
+
+- port: 32131
+  proto: tcp
+  service: traefik LoadBalancer NodePort (postgres-staging)
+  k8s_service: kube-system/traefik
+  namespace: kube-system
+  owner: platform
+  scope: public
+  status: removed
+  reason: "duplicates 5433 via the Traefik TCP entrypoint path, kube-proxy auto-allocated"
+  firewall_rule: "target (S6): closed"
+  ingress: NodePort (auto-allocated)
+  auth: n/a
+  temporary: false
+  expires: "deleted 2026-09-29 (P1-05 / OD-3); it was never in any manifest"
+
+
+
+- port: 6443
+  proto: tcp
+  service: k3s apiserver
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: public
+  status: remove
+  reason: "hostNetwork k3s apiserver; must only be reachable from tailnet devices per admin-plane decision"
+  firewall_rule: none today
+  ingress: direct (hostNetwork)
+  auth: client certs / bearer tokens
+  temporary: false
+  expires: null
+
+- port: 6443
+  proto: tcp
+  service: k3s apiserver
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: tailnet
+  status: target
+  reason: "admin plane is tailnet-only; kubectl/argocd CLI go over Tailscale or kubectl port-forward"
+  firewall_rule: "target (S6): no public rule for 6443"
+  ingress: direct (hostNetwork)
+  auth: client certs / bearer tokens
+  temporary: false
+  expires: null
+
+- port: 10250
+  proto: tcp
+  service: kubelet
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: public
+  status: remove
+  reason: "kubelet API; must be tailnet/cluster-internal only"
+  firewall_rule: none today
+  ingress: direct (hostNetwork)
+  auth: webhook authn
+  temporary: false
+  expires: null
+
+- port: 10250
+  proto: tcp
+  service: kubelet
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: tailnet
+  status: target
+  reason: "no public rule; only reachable from the tailnet / node itself"
+  firewall_rule: "target (S6): no public rule for 10250"
+  ingress: direct (hostNetwork)
+  auth: webhook authn
+  temporary: false
+  expires: null
+
+- port: 2379
+  proto: tcp
+  service: etcd (client)
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: public
+  status: remove
+  reason: "embedded etcd bound to the public IP as well as loopback — leftover from the 2-node cluster-init era; must be closed"
+  firewall_rule: none today
+  ingress: direct (hostNetwork)
+  auth: mTLS
+  temporary: false
+  expires: "closed at S6"
+
+- port: 2380
+  proto: tcp
+  service: etcd (peer)
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: public
+  status: remove
+  reason: "same as 2379 — peer port, single-member cluster now, no peer needed externally"
+  firewall_rule: none today
+  ingress: direct (hostNetwork)
+  auth: mTLS
+  temporary: false
+  expires: "closed at S6"
+
+- port: 9100
+  proto: tcp
+  service: node-exporter
+  k8s_service: monitoring/node-exporter
+  namespace: monitoring
+  owner: platform
+  scope: public
+  status: remove
+  reason: "hostNetwork DaemonSet leaks ~2.9k host metrics with no auth; must bind 127.0.0.1 or drop hostNetwork (S9)"
+  firewall_rule: none today
+  ingress: direct (hostNetwork)
+  auth: none
+  temporary: false
+  expires: "fixed at S9 (bind 127.0.0.1) and closed at S6 (firewall)"
+
+- port: 41641
+  proto: udp
+  service: tailscaled
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: public
+  status: live
+  reason: "Tailscale WireGuard endpoint; must stay reachable from any IP for NAT traversal"
+  firewall_rule: "target (S6): udp 41641 from 0.0.0.0/0 and ::/0"
+  ingress: direct
+  auth: WireGuard (Tailscale-managed keys)
+  temporary: false
+  expires: null
+
+- port: 8472
+  proto: udp
+  service: flannel VXLAN
+  k8s_service: null
+  namespace: null
+  owner: platform
+  scope: public
+  status: remove
+  reason: "pod-network overlay; never needs to be reachable off-host (single node) — close at S6"
+  firewall_rule: none today
+  ingress: direct
+  auth: none
+  temporary: false
+  expires: "closed at S6"

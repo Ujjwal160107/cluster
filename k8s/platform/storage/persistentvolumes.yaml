@@ -1,0 +1,104 @@
+# VCAP-009: the two static PVs that existed only in the cluster.
+#
+# They hold the VCAP Postgres data directories on the `vps-data` volume (`/srv/data`), and until now
+# they were created by hand — so a rebuild from git would have produced a cluster that could not bind
+# either VCAP Postgres PVC. Same shape as `k8s/apps/meghmitra/postgres.yaml`, which is the proven
+# in-git static-PV pattern here (that app is `Synced` with this exact structure).
+#
+# Two deliberate choices:
+#   - `claimRef` is NOT declared. The PV controller owns the binding; declaring it would pin a
+#     `uid`/`resourceVersion` into git, and the meghmitra PV proves ArgoCD does not clear an
+#     undeclared `claimRef` (that app stays Synced with its PV bound). The safety net for this
+#     adoption is a spec hash taken before and after the sync — see the changelog entry.
+#   - `argocd.argoproj.io/sync-options: Delete=false,Prune=false` (design invariant 4). This is the
+#     data on the cluster's only authoritative volume: a GitOps mistake must not be able to delete it.
+#     Removing these files from git can therefore never prune the PVs; they must be deleted by hand.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vcap-backend-dev-data-vps
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /srv/data/vcap-dev
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["vps"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vcap-backend-staging-data-vps
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /srv/data/vcap-staging
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["vps"]
+---
+# P3-M2: Adhigrahan Radar's store, the third static PV on `vps-data`.
+#
+# Declared here rather than in the tenant repository for the same reason the two PVs above are:
+# `adhigrahan-radar` is a third-party repository, and Phase 2's lesson is that a repository whose
+# `main` this owner cannot protect must not be able to create cluster-scoped objects. The tenant's
+# own `deploy/README.md` states that boundary explicitly ("The static PV the cluster side creates")
+# and specifies every field below; this file is that specification, reproduced.
+#
+# The claim (`meghmitra-data-pvc`) uses `storageClassName: ""` + `volumeName`, so it binds here and
+# never to a dynamically provisioned `local-path` volume that could silently land on the root disk.
+# `Retain` + `Delete=false,Prune=false` mean the store outlives the claim, and that no GitOps
+# mistake — including deleting this file — can prune it.
+#
+# `type: Directory` requires `/srv/data/meghmitra-data` to exist, owned by the UID/GID the API runs
+# as (10001). A hostPath volume keeps the host's ownership (the kubelet does not chown it) and the
+# app writes on every request, so an unwritable directory is a 500, not a log line. The directory is
+# declared in `ansible/roles/data_volume` (`data_volume_tenant_dirs`) and was created by hand on
+# 2026-09-29: `install -d -o 10001 -g 10001 -m 0750 /srv/data/meghmitra-data`.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: meghmitra-data-pvc-vps
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /srv/data/meghmitra-data
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["vps"]

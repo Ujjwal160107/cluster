@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Managed by ansible/roles/backup — do not hand-edit on the host, edit the template and re-run.
+#
+# Weekly retention enforcement for the restic repository. `restic backup` only ever adds; without
+# this the repo grows without bound, which is why the backup timers are only enabled together with
+# this one (see README.md).
+#
+# Keep policies mirror the "Retention (target)" column of docs/storage.md's dataset table:
+#   class A — 15-min snapshots for 48h, then daily 30d / weekly 12w / monthly 12m
+#   class C — 7 daily
+# Snapshots are tagged by vps-backup.sh (`--tag class-A|class-C`), which is what these filters match.
+set -uo pipefail
+
+RESTIC_REPOSITORY="{{ backup_restic_repository | default('') }}"
+if [ -z "$RESTIC_REPOSITORY" ]; then
+  echo "restic_repository not set — nothing to prune (see roles/backup/README.md)" >&2
+  exit 0
+fi
+# `restic` is a child process: it needs this in the environment, not just as a shell variable.
+# RESTIC_PASSWORD arrives via the systemd EnvironmentFile ({{ backup_env_file }}), SOPS-rendered.
+export RESTIC_REPOSITORY
+
+rc=0
+run() {
+  echo "+ restic $*"
+  restic "$@" || rc=1
+}
+
+# shellcheck disable=SC2086
+# (The prose that used to follow on the same line made shellcheck parse it as a
+# key=value pair and ignore the whole directive — SC1125.) the retention strings are intentionally word-split
+run forget --tag class-A {{ backup_retention_class_a }} --prune
+# shellcheck disable=SC2086
+run forget --tag class-C {{ backup_retention_class_c }} --prune
+# etcd snapshots (+ the k3s token/TLS pushed alongside them) have their own 12h cadence and tag.
+# shellcheck disable=SC2086
+run forget --tag etcd {{ backup_retention_etcd }} --prune
+
+exit "$rc"

@@ -1,0 +1,48 @@
+---
+# Base host hygiene — packages, log/journal limits, sshd hardening that doesn't touch login method
+# (that's admin_user's job, separately confirmed). Idempotent, safe to re-run.
+
+- name: Ensure unattended-upgrades is installed
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Disable automatic reboot in unattended-upgrades (owner reboots in a scheduled window)
+  ansible.builtin.lineinfile:
+    path: /etc/apt/apt.conf.d/50unattended-upgrades
+    regexp: '^\s*//?\s*Unattended-Upgrade::Automatic-Reboot\s+"'
+    line: 'Unattended-Upgrade::Automatic-Reboot "false";'
+    firstmatch: true
+    create: false
+  notify: Nothing to restart
+
+- name: Cap journald disk usage
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: '^\s*#?\s*SystemMaxUse='
+    line: "SystemMaxUse={{ journald_system_max_use }}"
+  notify: Restart journald
+
+- name: Ensure atop is installed
+  ansible.builtin.apt:
+    name: atop
+    state: present
+
+- name: Set atop retention (LOGINTERVAL/logrotate keep count)
+  ansible.builtin.lineinfile:
+    path: /etc/default/atop
+    regexp: '^\s*#?\s*LOGGENERATIONS='
+    line: "LOGGENERATIONS={{ atop_retention_days }}"
+    create: false
+  notify: Restart atop
+
+- name: Disable X11Forwarding in sshd_config (root-login policy is admin_user's job, not this)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?X11Forwarding\b'
+    line: "X11Forwarding {{ 'yes' if sshd_x11_forwarding else 'no' }}"
+    firstmatch: true
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd

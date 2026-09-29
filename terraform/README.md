@@ -1,0 +1,73 @@
+# Terraform — provider layer
+
+Owns: the Hetzner server (imported), primary IPs, the Hetzner firewall, R2 buckets, and (once
+`cf-terraforming`'s import plan is zero-diff) the Cloudflare zone's DNS records and settings. Never
+owns anything inside the VM or Kubernetes — see `../docs/maintenance.md#ownership-model`.
+
+Status: **applied, 2026-09-28.** `terraform state list` tracks 9 real resources: `hcloud_server.vps`
+(imported), `hcloud_primary_ip.{ipv4,ipv6}` (imported), `hcloud_ssh_key.{vps_root,upayan_sonder}`
+(imported), `hcloud_firewall.vps` + `hcloud_firewall_attachment.vps` (created, permissive — mirrors
+the pre-existing open state, changed no traffic), `cloudflare_r2_bucket.{vps_backups,vps_tfstate}`
+(created), `cloudflare_zone_settings_override.upayan_dev` (created, imports the zone's real current
+settings). See `../changelog/2026-09.md` (2026-09-28 entries) for the full apply history, the
+schema/doc errors it caught, and a state-loss mistake that was made and fully recovered in the same
+sitting.
+
+State is currently **local only** (`terraform.tfstate`, gitignored) — the planned R2 backend
+migration hasn't happened yet, see "What's still blocked" below.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `versions.tf` | Provider version pins |
+| `providers.tf` | Provider auth (env vars only, never hardcoded tokens) |
+| `backend.tf` | Local backend for now; commented-out R2 backend block, ready once an R2 API token exists |
+| `variables.tf` | Known IDs (server, volumes-not-managed) + Access allow-list + emergency-SSH escape hatch |
+| `hcloud.tf` | Server (imported, verified via API) + primary IPs (protection/auto_delete applied) |
+| `ssh-keys.tf` | Both SSH keys, imported with real public-key bodies fetched from the Hetzner API |
+| `firewall.tf` | Permissive firewall (S2), attached and live |
+| `cloudflare.tf` | Zone settings (imported real values; `min_tls_version` was found to be `1.0`, not the 1.2 the docs assumed — now declared as 1.2 per NET-005, **not yet applied** because the apply needs a Zone Settings token), R2 buckets (created) — **no DNS records** |
+| `imports.tf` | Declarative `import` blocks — all 5 importable resources active with real, verified IDs |
+| `outputs.tf` | Server IDs/IPs, firewall ID, bucket names |
+
+## What's still blocked
+
+1. **R2 backend migration** — needs an **R2 API token** (S3-compatible access key/secret pair,
+   generated separately in the Cloudflare dashboard: R2 → "Manage R2 API Tokens"). This is a
+   *different* credential from the Cloudflare API token already supplied (that token doesn't grant
+   S3-compatible access on its own). Until this exists, `terraform.tfstate` stays local — **do not
+   delete it** (a past mistake, recovered — see the changelog); if it must be regenerated, run
+   `terraform import` for every resource in `imports.tf` plus `hcloud_firewall.vps`,
+   `hcloud_firewall_attachment.vps`, `cloudflare_r2_bucket.{vps_backups,vps_tfstate}` (format:
+   `<account-id>/<bucket-name>`) — `cloudflare_zone_settings_override` does **not** support import
+   at all in this provider version; re-applying it is a safe idempotent re-PUT of already-live
+   values, not a duplicate.
+2. **DNS records** — deliberately not written; run `cf-terraforming` against the live zone first
+   (see the comment at the top of `cloudflare.tf`).
+3. **Cloudflare Access apps** (ArgoCD/Grafana) — S6 scope, not S2.
+
+## Bootstrap sequence (for a fresh checkout, credentials already known)
+
+```bash
+cd terraform
+export HCLOUD_TOKEN=...
+export CLOUDFLARE_API_TOKEN=...
+
+terraform init
+terraform plan   # should show 0 to import missing (already in state)/0 to change/0 to destroy
+                 # if state is missing, plan will show imports for everything in imports.tf —
+                 # that's expected and safe, they're declarative
+terraform apply  # only after reviewing the plan; paste the summary for confirmation first
+```
+
+Once the R2 backend token exists: uncomment the `backend "s3"` block in `backend.tf`,
+`terraform init -migrate-state`, confirm state lands in the `vps-tfstate` bucket, then stop treating
+the local `terraform.tfstate` as authoritative (it stays gitignored either way).
+
+## Related
+
+- `../docs/networking.md` — the firewall layers this config implements
+- `../docs/certificates.md` — the `min_tls_version` finding and TLS design
+- `../docs/plans/2026-09-27-architecture-review.md` §17 S2 — the full stage brief this directory implements
+- `../changelog/2026-09.md` — full apply history and the recovered state-loss mistake

@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: traefik-config
+  namespace: argocd
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/upayanmazumder/vps
+    targetRevision: main
+    path: k8s/platform/traefik
+  destination:
+    server: https://kubernetes.default.svc
+    # CLEAN-002 (2026-09-28): was `traefik`, an empty namespace that existed only as this
+    # Application's destination. Every resource in `k8s/platform/traefik/` declares
+    # `namespace: kube-system` explicitly (the HelmChartConfig, the TLSStore and the SOPS wildcard
+    # Secret all target kube-system, because that is where k3s's bundled Traefik lives), so the
+    # destination was descriptive of nothing. ArgoCD tracks resources by their own namespace, so
+    # moving it cannot orphan or prune them.
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

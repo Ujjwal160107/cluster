@@ -1,0 +1,45 @@
+---
+backup_staging_dir: /var/backups/staging
+backup_targets_path: /etc/vps-backup/backup-targets.yaml
+backup_etcd_snapshot_dir: /var/backups/etcd
+backup_script_path: /usr/local/sbin/vps-backup.sh
+backup_prune_script_path: /usr/local/sbin/vps-backup-prune.sh
+backup_check_script_path: /usr/local/sbin/vps-restic-check.sh
+backup_restore_test_script_path: /usr/local/sbin/vps-restore-test.sh
+# Retention mirrors the "Retention (target)" column of docs/storage.md's dataset table. Without a
+# prune the repository only ever grows, so this is not optional once the timers are enabled.
+backup_retention_class_a: "--keep-within 48h --keep-daily 30 --keep-weekly 12 --keep-monthly 12"
+backup_retention_class_c: "--keep-daily 7"
+# etcd snapshots (12h cadence) plus the k3s server token/TLS pushed in the same snapshot.
+# docs/storage.md's target: keep 14 recent offsite snapshots and 12 monthly ones.
+backup_retention_etcd: "--keep-last 14 --keep-monthly 12"
+backup_etcd_snapshot_script_path: /usr/local/sbin/vps-etcd-snapshot.sh
+backup_env_file: /etc/vps-backup/env # SOPS-decrypted from group_vars at deploy time (live since 2026-09-28)
+backup_node_exporter_textfile_dir: /var/lib/node_exporter/textfile_collector
+# Removed 2026-09-28 (CLEAN-002): `backup_healthchecks_backup_url` / `backup_healthchecks_etcd_url`.
+# healthchecks.io was **declined by the owner** (see README.md), so both were permanently empty, the
+# `[ -n "$HEALTHCHECK_URL" ]` guards never fired, and the only thing this config did was make two
+# scripts look like they pinged something. Staleness alerting is the textfile metric below plus the
+# Prometheus rule — a mechanism that actually runs.
+# backup_restic_repository: overridden in group_vars/vps/main.yaml to the LOCAL repo
+# (`/var/backups/restic`, live). Empty here means "dump but skip restic", which is what an
+# unconfigured host would do. Moving it to R2 (the offsite leg) needs an R2 S3 key pair from the
+# dashboard — the API cannot mint long-lived keys — and is tracked as DR-001.
+backup_restic_repository: ""
+
+# --- Offsite copy to Cloudflare R2 (DR-001) ---------------------------------------------------------
+# `restic copy` of ALL tags from backup_restic_repository into a second, independent restic repository
+# in R2, on its own hourly timer. Deployed and enabled as separate steps like every other unit here.
+backup_offsite_script_path: /usr/local/sbin/vps-backup-offsite.sh
+# Host-local R2 credentials: the S3 key pair scoped to the `vps-backups` bucket, the bucket endpoint
+# (which carries the account id) and the region, optionally a distinct RESTIC_OFFSITE_PASSWORD.
+# Deliberately NOT SOPS-rendered and NOT committed: this repo is going public and the account id is
+# not something to publish. The role only references the path — the systemd unit loads it with
+# `EnvironmentFile=`. The operator creates it, root:root 0600; README.md has the recipe.
+backup_offsite_env_file: /etc/vps-backup/r2.env
+# Offsite destination repository, rendered into the script. Empty (the default) is the documented
+# pre-R2 state: the script logs and exits 0 without invoking restic and writes no metric, so a host
+# with no credentials behaves exactly as before. For R2 the endpoint belongs in r2.env rather than
+# here, because `s3:https://<account-id>.r2.cloudflarestorage.com/vps-backups` carries the account id;
+# when both are set the environment wins. Either way the leg copies all tags with `restic copy`.
+backup_offsite_repository: ""

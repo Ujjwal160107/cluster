@@ -1,0 +1,18 @@
+[Unit]
+Description=vps-backup class {{ backup_class }} ({{ backup_class == 'A' and '30-min, vcap-staging + meghmitra' or 'daily, best-effort' }})
+After=k3s.service
+Wants=k3s.service
+
+[Service]
+Type=oneshot
+# systemd gives the unit no HOME, which makes restic log "unable to open cache: neither
+# $XDG_CACHE_HOME nor $HOME are defined" and re-scan the repository every run. Harmless for a local
+# repo, measurable once the repo is R2 — set it explicitly.
+Environment=HOME=/root
+# EnvironmentFile is a SOPS-decrypted file rendered by community.sops at deploy time (S5) — today
+# it carries RESTIC_PASSWORD alone; wiring the R2 offsite target adds the repository URL and the
+# R2 S3 credentials here (the script reads them from the environment). Without the file the script
+# degrades to "dump only, skip restic" (its own RESTIC_REPOSITORY check) — the `-` prefix makes a
+# missing file non-fatal.
+EnvironmentFile=-{{ backup_env_file }}
+ExecStart={{ backup_script_path }} {{ backup_class }}

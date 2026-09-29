@@ -1,0 +1,92 @@
+# Shared entrypoint for every scale-to-zero (low-priority) app.
+# All hosts below share one backend: the keda-add-ons-http interceptor
+# proxy. The interceptor looks at the Host header, matches it against each
+# app's HTTPScaledObject (spec.hosts), scales the target Deployment up from
+# zero if needed, and forwards the request — the "shared pool" these apps
+# run from instead of each reserving its own always-on capacity.
+#
+# Per-app HTTPScaledObjects live next to each app's other manifests
+# (k8s/apps/<app>/httpscaledobject.yaml) and own the routing + scaling
+# target; this Ingress only owns the Host -> interceptor wiring.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: low-priority-apps
+  namespace: keda
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: api-cas.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+    - host: html-nodejs-web-dj.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+    - host: bots.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+    - host: qwik.dj.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+    - host: api-smart-home-system.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+    - host: upayan-v5.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+    - host: api-upayan-v5.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keda-add-ons-http-interceptor-proxy
+                port:
+                  number: 8080
+  # No tls: block — Traefik serves *.upayan.dev via the default wildcard cert.

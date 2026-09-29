@@ -1,0 +1,41 @@
+ignore/
+promtail_logs.txt
+loki_check.txt
+promtail_check.txt
+
+# Terraform (terraform/) — never commit state or credential env files
+terraform/.terraform/
+terraform/.terraform.lock.hcl.bak
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfplan
+terraform/secrets.enc.env.dec
+terraform/*.auto.tfvars
+# Plan files can contain resolved sensitive values (a saved plan embeds the computed `user_data`,
+# which carries the Tailscale auth key while `enable_rebuild_server` is on). P3-04/P3-07 name them
+# explicitly rather than relying on the one existing pattern.
+*.plan
+tfplan
+plan.out
+# Private key material must never be committed. On 2026-09-28 it turned out
+# k8s/traefik/key.pem had been committed for four and a half months and was the key
+# of the certificate the origin was serving; this belt-and-braces entry makes the
+# mistake harder than gitleaks alone does.
+#
+# Two things are deliberately NOT affected:
+#   - `secrets.sops.yaml` — SOPS ciphertext is the sanctioned way to keep a secret
+#     in git. Note these patterns do not match it; do not add a `*.yaml` rule here.
+#   - `archived/**` was historical exports, tracked; the directory was deleted 2026-09-29 (CLEAN-001)
+#     except `archived/vcap-db-exposure/`, which stays until NET-001 has been stable 14 days
+#     to files git already tracks.
+# If a legitimate .pem/.key genuinely must be tracked, use `git add -f` and be ready
+# to justify it — SOPS is almost certainly the right answer instead.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Ansible's local collection/cache directory (never committed)
+.ansible/

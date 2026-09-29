@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: namespace-baseline-placeholder
+  labels:
+    # S11: Baseline is enforced (verified 2026-09-28: no pod or workload
+    # template in this namespace violates it, incl. the v1.34 host-probe
+    # control). Restricted stays warn-only -- the app images are not all
+    # non-root / capability-dropping yet.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

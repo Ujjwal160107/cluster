@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Cluster-scoped only: the static PVs backing class-A data on the `vps-data` volume.
+# No `namespace:` — PVs are cluster-scoped, and the `platform` AppProject permits the
+# `""` destination for exactly this reason (see k8s/argocd/projects/platform.yaml).
+resources:
+  - persistentvolumes.yaml
+  # Tenant namespaces (cluster-owned; see the file for why they left
+  # `CreateNamespace=true`). Namespaced objects, but the Application's
+  # destination has no namespace — a Namespace is cluster-scoped and the
+  # `platform` project permits the `""` destination for exactly this.
+  - namespaces-tenants.yaml

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: learning-qwik
+  labels:
+    app: learning-qwik
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: learning-qwik
+  template:
+    metadata:
+      labels:
+        app: learning-qwik
+    spec:
+      priorityClassName: low-priority
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      containers:
+        - name: learning-qwik
+          image: ghcr.io/upayanmazumder/devjourney/learning-qwik:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi

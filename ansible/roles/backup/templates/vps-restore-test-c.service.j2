@@ -1,0 +1,13 @@
+[Unit]
+Description=vps-backup monthly restore drill (class C)
+After=k3s.service
+Wants=k3s.service
+
+[Service]
+Type=oneshot
+# Class C, per DR-004 — the same drill against the daily-retention datasets (bitvault's Postgres and
+# the two MinIO directories), i.e. the data whose loss is inconvenient rather than unrecoverable.
+# A host unit for the same reason as the class-A one: the drill needs kubectl to reach a scratch pod.
+Environment=HOME=/root
+EnvironmentFile=-{{ backup_env_file }}
+ExecStart={{ backup_restore_test_script_path }} C

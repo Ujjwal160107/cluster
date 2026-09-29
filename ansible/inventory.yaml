@@ -1,0 +1,21 @@
+vps:
+  hosts:
+    vps:
+      # Tailnet IP, not the public IP — this inventory must keep working after S6 closes public
+      # SSH. Verified live: `tailscale status` on the node reports this address.
+      #
+      # ⚠️ That requires Tailscale to be up on the *control* machine. On 2026-09-28 the workstation's
+      # tailscale was down and the node was reachable only on its public address, so runs need:
+      #
+      #   ansible-playbook site.yml \
+      #     -e ansible_host=138.201.157.147 \
+      #     -e ansible_ssh_private_key_file=<your key for this node, e.g. ~/.ssh/id_ed25519>
+      #
+      # (The workstation's `~/.ssh/config` Host vps entry is public-IP plus your key for this node, but Ansible
+      # does not use it because ansible_host is set here.) With Tailscale up, no override is needed.
+      # Do not "fix" this by committing the public IP: S6 closes public SSH, and this file is what
+      # keeps the automation working afterwards.
+      ansible_host: 100.96.250.81
+      ansible_user: root # until the admin_user role creates `upayan` and root login is disabled
+                          # (separate confirmed step, see roles/admin_user/README.md)
+      ansible_python_interpreter: /usr/bin/python3

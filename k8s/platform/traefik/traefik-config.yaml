@@ -1,0 +1,35 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # This is the cluster's ONLY HelmChartConfig/traefik (two would collide on name), so every Traefik
+    # setting lives here.
+    ports:
+      postgres-dev:
+        port: 5432
+        expose:
+          default: true
+        exposedPort: 5432
+        protocol: TCP
+      postgres-staging:
+        port: 5433
+        expose:
+          default: true
+        exposedPort: 5433
+        protocol: TCP
+      metrics:
+        port: 9100
+        expose:
+          # In the Service so Prometheus can scrape it in-cluster. It is not reachable from the
+          # internet: the Hetzner firewall allows only 22/80/443/6443/5432/5433/udp-41641/icmp.
+          default: true
+        exposedPort: 9100
+        protocol: TCP
+    metrics:
+      prometheus:
+        addEntryPointsLabels: true
+        addRoutersLabels: true
+        addServicesLabels: true

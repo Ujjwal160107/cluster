@@ -1,0 +1,521 @@
+#!/usr/bin/env bash
+# Managed by ansible/roles/backup — do not hand-edit on the host, edit the template and re-run.
+#
+# Monthly automated restore drill (plan §12.8 / §17 S4). The point is not to prove snapshots exist;
+# it is to prove they can be turned back into usable data — and to do that **without touching
+# production**. The drill:
+#
+#   1. restores the newest class-A snapshot into a scratch directory,
+#   2. checks every Postgres dump carries the pg_dump custom-format magic,
+#   3. stands up a throwaway namespace (`restore-test`) with a scratch PostGIS pod,
+#   4. lists each dump with pg_restore, imports it, and compares the table list and row counts with
+#      the live database,
+#   5. restores the vcap-staging MinIO directory and diffs its file list against live,
+#   6. deletes the scratch namespace,
+#   7. writes a success timestamp only if everything passed.
+#
+# Usage: vps-restore-test.sh [A|C]     (default A)
+#
+# DR-004 (2026-09-28): the class is now a parameter, so this one drill covers class C as well as class
+# A — bitvault's Postgres and the two MinIO directories. Class C is the data whose loss is
+# inconvenient rather than unrecoverable, which is exactly the assumption worth testing rather than
+# assuming.
+#
+# **Coverage is reported, not assumed.** This script restores `postgres` dumps, `mongo` archives and
+# `file` trees. Any target of the requested class with an engine it cannot import is printed as NOT
+# COVERED at the end of the run and does not silently count as verified.
+#
+# `mongo` was the gap until 2026-09-28 (DR-004): rankstack's archive was restored by nothing and showed
+# up as NOT COVERED, which was correct and is why the report exists. It is now restored into a scratch
+# `mongo` instance and compared collection-by-collection, the same way Postgres is.
+#
+# The success metric is per class (`{class="A"}`), so a class-C run can never satisfy the class-A
+# staleness alert — which is exactly what would happen if both wrote the same series.
+#
+# A drill that cannot run its checks FAILS loudly and writes no metric, so the staleness alert fires.
+# It never writes into a live database: the earlier revision imported into a scratch database on the
+# production instance, which the brief explicitly does not ask for.
+set -uo pipefail
+
+DRILL_CLASS="${1:-A}"
+case "$DRILL_CLASS" in
+  A|C) ;;
+  *) echo "usage: vps-restore-test.sh [A|C] (got '$DRILL_CLASS')" >&2; exit 2 ;;
+esac
+# Exported because the yq expressions below read it with `strenv()`. `yq --arg` does not exist in
+# mikefarah's yq (v4.44 here): it fails with "unknown flag: --arg" and prints usage — which is how the
+# first class-C run failed, and it would have failed the class-A drill the same way.
+export DRILL_CLASS
+
+RESTIC_REPOSITORY="{{ backup_restic_repository | default('') }}"
+STAGING_CLASS="{{ backup_staging_dir }}/class-${DRILL_CLASS}"
+TARGETS_FILE="{{ backup_targets_path }}"
+# Per class, so a manual class-C run cannot delete a class-A run's restored data. (The lock below
+# still serialises the drills themselves.)
+WORKDIR="/var/tmp/vps-restore-test-${DRILL_CLASS}"
+TEXTFILE_DIR="{{ backup_node_exporter_textfile_dir | default('/var/lib/node_exporter/textfile_collector') }}"
+# Class A keeps the historical name `restore-test`, which docs and the runbook refer to; class C gets
+# its own so an overlapping manual run cannot delete the other drill's scratch pods.
+if [ "$DRILL_CLASS" = "A" ]; then
+  SCRATCH_NS="restore-test"
+else
+  SCRATCH_NS="restore-test-$(printf '%s' "$DRILL_CLASS" | tr '[:upper:]' '[:lower:]')"
+fi
+SCRATCH_PASSWORD="drill-$(date +%s)"
+
+if [ -z "$RESTIC_REPOSITORY" ]; then
+  echo "restic_repository not set — nothing to drill (see roles/backup/README.md)" >&2
+  exit 0
+fi
+export RESTIC_REPOSITORY
+
+# Only one drill at a time. Every run deletes the whole `restore-test` namespace on exit, so an
+# overlapping run (a manual one while the monthly timer fires, say) kills the other's scratch pod
+# mid-import — which surfaces as postgres reporting "terminating connection due to administrator
+# command" and the import failing for entirely misleading reasons. That cost real debugging time.
+exec 9>"/var/lock/vps-restore-test.lock"
+if ! flock -n 9; then
+  echo "another restore drill is already running (lock held) — exiting without doing anything" >&2
+  exit 0
+fi
+
+rc=0
+fail() { echo "DRILL FAILED: $*" >&2; rc=1; }
+cleanup() {
+  rm -rf "$WORKDIR"
+  if kubectl get namespace "$SCRATCH_NS" >/dev/null 2>&1; then
+    kubectl delete namespace "$SCRATCH_NS" --wait=false >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+rm -rf "$WORKDIR"; mkdir -p "$WORKDIR"
+# The class-A metric file was UNLABELLED before DR-004 (the metric is per class now). Leaving it
+# behind would freeze it at its last value and hold the staleness alert open forever — a permanently
+# firing alert is worse than none, because it trains you to ignore the channel.
+#
+# Removed only on a class-A run, and unconditionally there, for two reasons:
+#   - on success the labelled series below replaces it, so coverage is continuous;
+#   - on *failure* there is then no series at all, and the alert's `noDataState: Alerting` says exactly
+#     what should be said: no successful class-A drill is recorded.
+# A class-C run leaves it alone: class C cannot supply the class-A series, so deleting it there would
+# raise a false alarm until the next class-A drill.
+if [ "$DRILL_CLASS" = "A" ]; then
+  rm -f "$TEXTFILE_DIR/vps_restore_test.prom"
+fi
+
+echo "+ restic restore latest --tag class-${DRILL_CLASS} --target $WORKDIR"
+restic restore latest --tag "class-${DRILL_CLASS}" --target "$WORKDIR" || fail "restic restore returned non-zero"
+
+restored_dumps=$(find "$WORKDIR$STAGING_CLASS/pg" -name '*.dump' 2>/dev/null | sort)
+[ -n "$restored_dumps" ] || fail "no Postgres dumps were restored from $STAGING_CLASS/pg"
+
+# --- 1. magic bytes: cheap, needs no client, catches truncation and empty files ----------------
+while IFS= read -r dump; do
+  magic=$(head -c 5 "$dump" 2>/dev/null || true)
+  [ "$magic" = "PGDMP" ] || fail "$(basename "$dump") lacks the pg_dump custom-format magic (got '${magic}')"
+done <<< "$restored_dumps"
+
+# --- 2. scratch namespace ---------------------------------------------------------------
+# One scratch pod *per target*, created from that target's own image. This matters: meghmitra runs
+# PostGIS, and importing it into a plain `postgres` image silently loses the extension-owned tables
+# (geometry_columns, spatial_ref_sys) — which is exactly what the first run of this rewrite caught.
+# The brief's "a scratch Postgres pod and a scratch PostGIS pod" is the same requirement.
+scratch_pod_for() {
+  # Must be a valid DNS label: lowercase alphanumerics and '-'. An underscore here is rejected by
+  # the API server, and the symptom is confusing — `kubectl run` fails, the pod never exists, and
+  # the readiness wait times out reporting "never became ready".
+  local slug
+  slug=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+  echo "restore-pg-${slug:0:40}"
+}
+
+ensure_scratch_ns() {
+  local phase out
+  phase=$(kubectl get namespace "$SCRATCH_NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  if [ "$phase" = "Active" ]; then return 0; fi
+
+  if [ "$phase" = "Terminating" ]; then
+    # This cluster has a known wedge: if an aggregated APIService (KEDA's external metrics) is
+    # unavailable for a moment while a namespace is being deleted, the namespace controller records
+    # "stale GroupVersion discovery" and never retries, so the namespace hangs in Terminating
+    # forever and blocks anything new in it. This drill deletes its own namespace every month, so it
+    # has to be able to recover from that — but only for its own empty scratch namespace.
+    echo "  note: $SCRATCH_NS is Terminating (stale-APIService wedge); waiting, then clearing finalizers if empty"
+    for _ in $(seq 1 10); do
+      phase=$(kubectl get namespace "$SCRATCH_NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+      [ -z "$phase" ] && break
+      sleep 3
+    done
+    if [ -n "$phase" ]; then
+      if [ -n "$(kubectl get all -n "$SCRATCH_NS" --no-headers 2>/dev/null)" ]; then
+        echo "  ERROR: $SCRATCH_NS is Terminating and not empty — refusing to force-delete it" >&2
+        return 1
+      fi
+      kubectl get namespace "$SCRATCH_NS" -o json | jq '.spec.finalizers=[]' | \
+        kubectl replace --raw "/api/v1/namespaces/$SCRATCH_NS/finalize" -f - >/dev/null 2>&1 || true
+      sleep 2
+    fi
+  fi
+
+  if ! kubectl get namespace "$SCRATCH_NS" >/dev/null 2>&1; then
+    echo "+ creating scratch namespace $SCRATCH_NS"
+    if ! out=$(kubectl create namespace "$SCRATCH_NS" --dry-run=client -o yaml | kubectl apply -f - 2>&1); then
+      echo "  ERROR creating namespace: $out" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+ensure_scratch_pod() {
+  local pod_name="$1" image="$2" ready=0
+  if kubectl -n "$SCRATCH_NS" get pod "$pod_name" >/dev/null 2>&1; then
+    # Present is not the same as serving: re-check rather than assuming.
+    if kubectl -n "$SCRATCH_NS" exec "$pod_name" -- pg_isready -h 127.0.0.1 -U drill >/dev/null 2>&1; then return 0; fi
+    echo "  existing scratch pod $pod_name is not answering over TCP yet — waiting for it"
+  fi
+  echo "  starting scratch pod $pod_name (image $image)"
+  # An explicit manifest rather than `kubectl run`: this kubectl has no --requests/--limits flag, and
+  # resources cannot be added to a pod after creation. They matter here — a pod with no requests is
+  # BestEffort, and BestEffort pods are evicted first on a node as tight on memory as this one, which
+  # is exactly how an earlier run of this drill lost its scratch server mid-import.
+  local out
+  if ! out=$(kubectl -n "$SCRATCH_NS" apply -f - 2>&1 <<MANIFEST
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod_name
+  labels:
+    app: vps-restore-drill
+spec:
+  restartPolicy: Never
+  containers:
+    - name: postgres
+      image: $image
+      env:
+        - name: POSTGRES_PASSWORD
+          value: "$SCRATCH_PASSWORD"
+        - name: POSTGRES_USER
+          value: "drill"
+        - name: POSTGRES_DB
+          value: "drill"
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+MANIFEST
+  ); then
+    echo "  ERROR starting pod: $out" >&2
+    return 1
+  fi
+  # `pg_isready` over the unix socket is NOT enough: the official postgres entrypoint runs a
+  # temporary server (listen_addresses='') to execute init scripts, answers pg_isready there, then
+  # shuts it down ("terminating connection due to administrator command") and starts the real one.
+  # Checking over TCP instead only succeeds once the final server is listening, which is what every
+  # later step needs. Getting this wrong is what made earlier runs fail with a server that "died"
+  # mid-import.
+  for _ in $(seq 1 60); do
+    if kubectl -n "$SCRATCH_NS" exec "$pod_name" -- pg_isready -h 127.0.0.1 -U drill >/dev/null 2>&1; then ready=1; break; fi
+    sleep 3
+  done
+  if [ "$ready" != "1" ]; then
+    echo "  pod never became ready; state: $(kubectl -n "$SCRATCH_NS" get pod "$pod_name" -o jsonpath='{.status.phase} {.status.containerStatuses[*].state}' 2>&1)" >&2
+    kubectl -n "$SCRATCH_NS" logs "$pod_name" --tail=5 2>&1 | sed 's/^/    /' >&2
+    return 1
+  fi
+}
+
+scratch_psql() { kubectl -n "$SCRATCH_NS" exec "$1" -- psql -U drill -d "$2" -tAc "$3" 2>/dev/null; }
+
+scratch_mongo_pod_for() {
+  local slug
+  slug=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+  echo "restore-mongo-${slug:0:34}"
+}
+
+# Every non-system collection and its document count, one line per collection, sorted. The same shape
+# as the Postgres COUNT_SQL above, so the comparison below reads the same way and a difference names
+# the collection rather than just a total.
+MONGO_COUNT_EVAL='const out=[]; db.getMongo().getDBNames().filter(n=>!["admin","config","local"].includes(n)).sort().forEach(n=>{const d=db.getSiblingDB(n); d.getCollectionNames().sort().forEach(c=>out.push(n+"."+c+"|"+d.getCollection(c).countDocuments({})));}); print(out.join("\n"));'
+
+scratch_mongo() { # $1 = pod, $2 = eval expression
+  kubectl -n "$SCRATCH_NS" exec "$1" -- mongosh --quiet --host 127.0.0.1 --eval "$2" 2>/dev/null
+}
+
+ensure_scratch_mongo_pod() {
+  local pod_name="$1" image="$2" ready=0
+  if kubectl -n "$SCRATCH_NS" get pod "$pod_name" >/dev/null 2>&1; then
+    if scratch_mongo "$pod_name" 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; then return 0; fi
+    echo "  existing scratch pod $pod_name is not answering yet — waiting for it"
+  fi
+  echo "  starting scratch pod $pod_name (image $image)"
+  # Same reasoning as the Postgres pod above: an explicit manifest, because resources cannot be added
+  # after creation and a BestEffort pod is the first thing evicted on a node this tight on memory.
+  # No env, no auth: the live instance this is restored *from* has none either (verified 2026-09-28 —
+  # `mongodump` in vps-backup.sh connects with no credentials), and this pod is scratch either way.
+  local out
+  if ! out=$(kubectl -n "$SCRATCH_NS" apply -f - 2>&1 <<MANIFEST
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod_name
+  labels:
+    app: vps-restore-drill
+spec:
+  restartPolicy: Never
+  containers:
+    - name: mongo
+      image: $image
+      args: ["--bind_ip_all"]
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          cpu: 500m
+          memory: 768Mi
+MANIFEST
+  ); then
+    echo "  ERROR starting pod: $out" >&2
+    return 1
+  fi
+  for _ in $(seq 1 60); do
+    if scratch_mongo "$pod_name" 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; then ready=1; break; fi
+    sleep 3
+  done
+  if [ "$ready" != "1" ]; then
+    echo "  pod never became ready; state: $(kubectl -n "$SCRATCH_NS" get pod "$pod_name" -o jsonpath='{.status.phase} {.status.containerStatuses[*].state}' 2>&1)" >&2
+    kubectl -n "$SCRATCH_NS" logs "$pod_name" --tail=5 2>&1 | sed 's/^/    /' >&2
+    return 1
+  fi
+}
+
+# Per-table row counts in one query, so this is one round trip per side rather than one per table.
+COUNT_SQL="select table_name || '|' || (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')))[1]::text::bigint from information_schema.tables where table_schema='public' order by table_name"
+
+# --- 3. import each dump next to its live database and compare -------------------------------
+while IFS= read -r target; do
+  tns=$(yq -r .namespace <<<"$target"); workload=$(yq -r .workload <<<"$target")
+  pod=$(kubectl get pods -n "$tns" -o name 2>/dev/null | grep "$workload" | head -1 | cut -d/ -f2)
+  dump="$WORKDIR$STAGING_CLASS/pg/${tns}-${workload}.dump"
+  if [ -z "$pod" ] || [ ! -f "$dump" ]; then
+    fail "missing pod or restored dump for $tns/$workload"
+    continue
+  fi
+  scratch_db="import_$(echo "$tns-$workload" | tr -c 'a-z0-9' '_' | cut -c1-50)"
+  base=$(basename "$dump")
+  image=$(kubectl get pod -n "$tns" "$pod" -o jsonpath='{.spec.containers[0].image}')
+  scratch_pod=$(scratch_pod_for "$tns-$workload")
+  ensure_scratch_ns
+  if ! ensure_scratch_pod "$scratch_pod" "$image"; then
+    fail "scratch pod $scratch_pod (image $image) never became ready for $tns/$workload"
+    continue
+  fi
+
+  if ! kubectl cp "$dump" "$SCRATCH_NS/$scratch_pod:/tmp/$base" >/dev/null 2>&1; then
+    fail "could not copy $base into the scratch pod"
+    continue
+  fi
+
+  toc=$(kubectl -n "$SCRATCH_NS" exec "$scratch_pod" -- pg_restore --list "/tmp/$base" 2>/dev/null | grep -c ';' || true)
+  scratch_psql "$scratch_pod" postgres "drop database if exists $scratch_db" >/dev/null
+  if ! scratch_psql "$scratch_pod" postgres "create database $scratch_db" >/dev/null; then
+    fail "could not create scratch database $scratch_db"
+    continue
+  fi
+  kubectl -n "$SCRATCH_NS" exec "$scratch_pod" -- \
+    pg_restore -U drill -d "$scratch_db" --no-owner --no-privileges "/tmp/$base" >/tmp/drill-restore.log 2>&1 || true
+  # `pg_restore` exits non-zero on mere warnings, so the comparison below decides pass/fail — but a
+  # server that vanished mid-import ("no connection to the server", "terminating connection due to
+  # administrator command") means the scratch pod itself was killed, most likely evicted under node
+  # memory pressure. That is environmental, not a bad backup, so retry once against a fresh pod
+  # before reporting anything.
+  if grep -qiE 'no connection to the server|terminating connection due to administrator command' /tmp/drill-restore.log; then
+    echo "  note: scratch pod died during import of $base (likely eviction) — recreating it and retrying once"
+    kubectl -n "$SCRATCH_NS" delete pod "$scratch_pod" --wait=true --timeout=60s >/dev/null 2>&1 || true
+    if ! ensure_scratch_pod "$scratch_pod" "$image"; then
+      fail "scratch pod $scratch_pod could not be recreated after dying mid-import"
+      continue
+    fi
+    kubectl cp "$dump" "$SCRATCH_NS/$scratch_pod:/tmp/$base" >/dev/null 2>&1 || true
+    scratch_psql "$scratch_pod" postgres "drop database if exists $scratch_db" >/dev/null
+    scratch_psql "$scratch_pod" postgres "create database $scratch_db" >/dev/null
+    kubectl -n "$SCRATCH_NS" exec "$scratch_pod" -- \
+      pg_restore -U drill -d "$scratch_db" --no-owner --no-privileges "/tmp/$base" >/tmp/drill-restore.log 2>&1 || true
+  fi
+  if grep -qciE '^pg_restore: error' /tmp/drill-restore.log >/dev/null; then
+    echo "  note: pg_restore reported $(grep -ciE '^pg_restore: error' /tmp/drill-restore.log) error lines for $base (comparison below decides)"
+  fi
+
+  live_pod_tables=$(kubectl -n "$tns" exec "$pod" -- sh -c \
+    "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -tAc \"$COUNT_SQL\" 2>/dev/null")
+  scratch_tables=$(scratch_psql "$scratch_pod" "$scratch_db" "$COUNT_SQL")
+
+  live_list=$(printf '%s\n' "$live_pod_tables" | cut -d'|' -f1 | sed '/^$/d' | sort)
+  scratch_list=$(printf '%s\n' "$scratch_tables" | cut -d'|' -f1 | sed '/^$/d' | sort)
+  if [ "$live_list" != "$scratch_list" ]; then
+    fail "$tns/$workload: table list differs (live $(printf '%s\n' "$live_list" | grep -c .) vs restored $(printf '%s\n' "$scratch_list" | grep -c .))"
+  fi
+
+  # Row counts: the invariant that matters is "nothing that had rows live came back empty".
+  empty_after_restore=$(python3 - "$live_pod_tables" "$scratch_tables" <<'PY'
+import sys
+def parse(t):
+    out={}
+    for line in t.splitlines():
+        if '|' in line:
+            k,v=line.rsplit('|',1)
+            try: out[k]=int(v)
+            except ValueError: pass
+    return out
+live, rest = parse(sys.argv[1]), parse(sys.argv[2])
+print(' '.join(f"{k}(live={live[k]},restored=0)" for k in sorted(live) if live.get(k,0) > 0 and rest.get(k,0) == 0))
+PY
+)
+  if [ -n "$empty_after_restore" ]; then
+    fail "$tns/$workload: tables empty after restore but populated live: $empty_after_restore"
+  fi
+  live_rows=$(printf '%s\n' "$live_pod_tables" | awk -F'|' '{s+=$2} END{print s+0}')
+  rest_rows=$(printf '%s\n' "$scratch_tables" | awk -F'|' '{s+=$2} END{print s+0}')
+  echo "  $tns/$workload: $toc TOC entries, $(printf '%s\n' "$scratch_list" | grep -c .) tables imported; rows live=$live_rows restored=$rest_rows"
+done < <(yq -o=json '.[] | select(.class == strenv(DRILL_CLASS) and .engine == "postgres")' "$TARGETS_FILE" | jq -c .)
+
+# --- 3b. Mongo: restore the archive into a scratch instance and compare collections -------------
+# DR-004 (2026-09-28). The class-C drill covered Postgres and file targets only, so rankstack's Mongo
+# archive was restored by nothing and was reported as NOT COVERED. This closes that: the same shape as
+# the Postgres check, against `mongodump --archive --gzip` output.
+#
+# The oplog portion of an archive (`--oplog`, which the target asks for) is deliberately NOT replayed:
+# the point here is whether the dumped data comes back with the same collections and counts, and
+# replaying oplog entries against a standalone scratch mongod would exercise a path production never
+# takes (the live instance is a replica set member). The dump's data files are what is verified.
+while IFS= read -r target; do
+  tns=$(yq -r .namespace <<<"$target"); workload=$(yq -r .workload <<<"$target")
+  pod=$(kubectl get pods -n "$tns" -o name 2>/dev/null | grep "$workload" | grep -v rs-init | head -1 | cut -d/ -f2)
+  archive="$WORKDIR$STAGING_CLASS/mongo/${tns}-${workload}.archive.gz"
+  if [ -z "$pod" ] || [ ! -f "$archive" ]; then
+    fail "missing pod or restored archive for $tns/$workload"
+    continue
+  fi
+  image=$(kubectl get pod -n "$tns" "$pod" -o jsonpath='{.spec.containers[0].image}')
+  scratch_pod=$(scratch_mongo_pod_for "$tns-$workload")
+  ensure_scratch_ns
+  if ! ensure_scratch_mongo_pod "$scratch_pod" "$image"; then
+    fail "scratch mongo pod $scratch_pod (image $image) never became ready for $tns/$workload"
+    continue
+  fi
+  if ! kubectl cp "$archive" "$SCRATCH_NS/$scratch_pod:/tmp/drill.archive.gz" >/dev/null 2>&1; then
+    fail "could not copy $(basename "$archive") into the scratch pod"
+    continue
+  fi
+  # A failure here is reported with mongorestore's own words; the comparison below decides pass/fail,
+  # because mongorestore exits non-zero on warnings.
+  kubectl -n "$SCRATCH_NS" exec "$scratch_pod" --     mongorestore --archive=/tmp/drill.archive.gz --gzip >/tmp/drill-mongo-restore.log 2>&1 || true
+  # Count real failures, precisely. A bare `grep -i 'error\|failed'` matches mongorestore's OWN summary
+  # line — "0 document(s) failed to restore" — which is how the first version of this reported "1
+  # error/failed line(s)" on a perfectly clean restore. A check that cries wolf is one that gets
+  # ignored, so this counts the numbers and fails on them rather than printing a note.
+  mongo_failed=$(python3 - /tmp/drill-mongo-restore.log <<'PYMONGOFAIL'
+import re, sys
+n = 0
+for line in open(sys.argv[1], errors="replace"):
+    for m in re.finditer(r"\(\d+ documents?, (\d+) failures?\)", line):
+        n += int(m.group(1))
+    for m in re.finditer(r"(\d+) document\(s\) failed to restore", line):
+        n += int(m.group(1))
+    if "Failed:" in line:
+        n += 1
+print(n)
+PYMONGOFAIL
+)
+  if [ "${mongo_failed:-0}" -gt 0 ]; then
+    fail "$tns/$workload: mongorestore reported $mongo_failed failed document(s)/collection(s) — see /tmp/drill-mongo-restore.log"
+  else
+    echo "  $(basename "$archive"): mongorestore reported no failures"
+  fi
+
+  live_collections=$(kubectl -n "$tns" exec "$pod" -- mongosh --quiet --host 127.0.0.1 --eval "$MONGO_COUNT_EVAL" 2>/dev/null)
+  scratch_collections=$(scratch_mongo "$scratch_pod" "$MONGO_COUNT_EVAL")
+
+  live_list=$(printf '%s\n' "$live_collections" | cut -d'|' -f1 | sed '/^$/d' | sort)
+  scratch_list=$(printf '%s\n' "$scratch_collections" | cut -d'|' -f1 | sed '/^$/d' | sort)
+  if [ "$live_list" != "$scratch_list" ]; then
+    fail "$tns/$workload: collection list differs (live $(printf '%s\n' "$live_list" | grep -c .) vs restored $(printf '%s\n' "$scratch_list" | grep -c .))"
+  fi
+  empty_after_restore=$(python3 - "$live_collections" "$scratch_collections" <<'PYMONGO'
+import sys
+def parse(t):
+    out = {}
+    for line in t.splitlines():
+        if '|' in line:
+            k, v = line.rsplit('|', 1)
+            try:
+                out[k] = int(v)
+            except ValueError:
+                pass
+    return out
+live, rest = parse(sys.argv[1]), parse(sys.argv[2])
+print(' '.join(f"{k}(live={live[k]},restored=0)" for k in sorted(live) if live.get(k, 0) > 0 and rest.get(k, 0) == 0))
+PYMONGO
+)
+  if [ -n "$empty_after_restore" ]; then
+    fail "$tns/$workload: collections empty after restore but populated live: $empty_after_restore"
+  fi
+  live_docs=$(printf '%s\n' "$live_collections" | awk -F'|' '{s+=$2} END{print s+0}')
+  rest_docs=$(printf '%s\n' "$scratch_collections" | awk -F'|' '{s+=$2} END{print s+0}')
+  echo "  $tns/$workload: $(printf '%s\n' "$scratch_list" | grep -c .) collections restored; documents live=$live_docs restored=$rest_docs"
+done < <(yq -o=json '.[] | select(.class == strenv(DRILL_CLASS) and .engine == "mongo")' "$TARGETS_FILE" | jq -c .)
+
+# --- 4. MinIO: every restored object must exist live -----------------------------------------
+while IFS= read -r target; do
+  fpath=$(yq -r '.path' <<<"$target")
+  [ -d "$WORKDIR$fpath" ] || continue
+  # .minio.sys/tmp/ is MinIO's scratch area (including its trash) and churns constantly, so files
+  # that existed at dump time are routinely gone later. Comparing it makes the check flap for no
+  # reason; the object data and the rest of .minio.sys metadata are what must survive.
+  restored_list=$(cd "$WORKDIR$fpath" && find . -type f 2>/dev/null | grep -v '^\./\.minio\.sys/tmp/' | sort)
+  if [ -z "$restored_list" ]; then
+    fail "MinIO restore of $fpath produced no files"
+    continue
+  fi
+  live_list=$(cd "$fpath" 2>/dev/null && find . -type f 2>/dev/null | grep -v '^\./\.minio\.sys/tmp/' | sort)
+  missing=$(comm -23 <(printf '%s\n' "$restored_list") <(printf '%s\n' "$live_list"))
+  if [ -n "$missing" ]; then
+    fail "$(printf '%s\n' "$missing" | grep -c .) object(s) restored from $fpath are absent from the live directory — first: $(printf '%s\n' "$missing" | head -1)"
+  else
+    echo "  $fpath: $(printf '%s\n' "$restored_list" | grep -c .) restored objects, all present live ($(printf '%s\n' "$live_list" | grep -c .) live)"
+  fi
+done < <(yq -o=json '.[] | select(.class == strenv(DRILL_CLASS) and .engine == "file")' "$TARGETS_FILE" | jq -c .)
+
+# --- 4b. coverage: name what this drill cannot verify, instead of implying it did ---------------
+uncovered=0
+while IFS= read -r target; do
+  eng=$(yq -r '.engine' <<<"$target"); tns=$(yq -r '.namespace' <<<"$target"); wl=$(yq -r '.workload' <<<"$target")
+  case "$eng" in
+    postgres|file|mongo) ;;
+    *)
+      uncovered=$((uncovered + 1))
+      echo "  NOT COVERED: $tns/$wl uses engine '$eng' — this drill restores postgres dumps and file"
+      echo "               trees only, so that target was NOT verified by this run."
+      ;;
+  esac
+done < <(yq -o=json '.[] | select(.class == strenv(DRILL_CLASS))' "$TARGETS_FILE" | jq -c .)
+[ "$uncovered" -gt 0 ] && echo "  ($uncovered target(s) of class ${DRILL_CLASS} are outside this drill's coverage — see roles/backup/README.md)"
+
+# --- 5. success metric ------------------------------------------------------------------------
+if [ "$rc" -eq 0 ]; then
+  mkdir -p "$TEXTFILE_DIR"
+  {
+    echo "vps_restore_test_last_success_timestamp{class=\"${DRILL_CLASS}\"} $(date +%s)"
+    echo "vps_restore_test_restored_files{class=\"${DRILL_CLASS}\"} $(find "$WORKDIR" -type f 2>/dev/null | wc -l)"
+    echo "vps_restore_test_uncovered_targets{class=\"${DRILL_CLASS}\"} $uncovered"
+  } > "$TEXTFILE_DIR/vps_restore_test_class_${DRILL_CLASS}.prom.$$"
+  mv "$TEXTFILE_DIR/vps_restore_test_class_${DRILL_CLASS}.prom.$$" "$TEXTFILE_DIR/vps_restore_test_class_${DRILL_CLASS}.prom"
+  echo "drill passed (class ${DRILL_CLASS})"
+fi
+
+exit "$rc"

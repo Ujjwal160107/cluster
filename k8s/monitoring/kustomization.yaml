@@ -1,0 +1,72 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: monitoring
+resources:
+  - namespace.yaml
+  - pv-monitoring.yaml
+  # Prometheus
+  - prometheus-rbac.yaml
+  - prometheus-configmap.yaml
+  - prometheus-pvc.yaml
+  - prometheus-deployment.yaml
+  - prometheus-service.yaml
+  # Loki
+  - loki-configmap.yaml
+  - loki-pvc.yaml
+  - loki-deployment.yaml
+  - loki-service.yaml
+  # Grafana
+  - grafana-datasources-configmap.yaml
+  - grafana-pvc.yaml
+  - grafana-deployment.yaml
+  - grafana-service.yaml
+  - grafana-ingress.yaml
+  - grafana-create-dev-user-job.yaml
+  # Node exporters
+  - node-exporter-daemonset.yaml
+  - node-exporter-service.yaml
+  # kube-state-metrics
+  - kube-state-metrics-rbac.yaml
+  - kube-state-metrics-deployment.yaml
+  - kube-state-metrics-service.yaml
+  # Promtail
+  - promtail-serviceaccount.yaml
+  - promtail-clusterrole.yaml
+  - promtail-clusterrolebinding.yaml
+  - promtail-config.yaml
+  - promtail-daemonset.yaml
+
+configMapGenerator:
+  # Dashboard provider — stable name; changing content doesn't need pod restart
+  # (Grafana polls every updateIntervalSeconds anyway).
+  - name: grafana-dashboard-provider
+    options:
+      disableNameSuffixHash: true
+    files:
+      - dashboardproviders.yaml=grafana-dashboardproviders.yaml
+  # Dashboard JSON — hashed so the Deployment spec changes when content does,
+  # guaranteeing a Grafana pod restart on every dashboard update.
+  - name: grafana-dashboards
+    files:
+      - vcap-logs.json
+      - dashboard-node.json
+      - dashboard-loki.json
+      - dashboard-argocd.json
+      - dashboard-vcap-dev.json
+      - dashboard-vcap-staging.json
+      - dashboard-vcap-metrics.json
+  # Alerting — hashed so Grafana restarts and re-provisions on every change.
+  - name: grafana-alerting-config
+    files:
+      - notification-policies.yaml=grafana-alerting-policies.yaml
+      - rules.yaml=grafana-alerting-rules.yaml
+
+secretGenerator:
+  # Discord webhook contact point — kept as a Secret (not ConfigMap) since it
+  # embeds the webhook URL; hashed so Grafana restarts when it changes.
+  - name: grafana-alerting-contactpoints
+    files:
+      - contactpoints.yaml=grafana-alerting-contactpoints.yaml
+generators:
+  # SOPS-encrypted via ksops (kind: ksops) -- see secrets.sops.yaml
+  - secret-generator.yaml

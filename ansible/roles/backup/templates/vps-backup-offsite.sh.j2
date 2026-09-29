@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Managed by ansible/roles/backup — do not hand-edit on the host, edit the template and re-run.
+#
+# Offsite leg (plan DR-001): copy EVERY snapshot — all tags: class-A, class-C, etcd and the exported
+# image tarballs — from the local restic repository into a *second, independent* restic repository in
+# Cloudflare R2 (bucket `vps-backups`). The local repository stays the primary; this is the copy that
+# survives losing the node, which is the gap CLAUDE.md and docs/disaster-recovery.md record today.
+#
+# Why `restic copy` and not a second `restic backup` straight to R2: a copy carries the snapshots the
+# restore drill has already verified into the offsite repository, rather than producing a second,
+# unverified snapshot set. It is also incremental for free: `restic copy` lists what the destination
+# already holds, skips snapshots it already has, and — because restic stores content-addressed packs —
+# uploads only the packs the destination lacks. Measured on the equivalent workstation mirror (DR-003):
+# the first copy of the 383 MB repository took 21m44s, every later run 25s. `--from-repo` names the
+# source repository; verified on the node 2026-09-29 that the pinned restic (0.16.4) implements
+# `--from-repo`, `RESTIC_FROM_REPOSITORY` and `RESTIC_FROM_PASSWORD` (`restic copy --help` plus the
+# strings in the binary), so the older `--repo2` spelling (renamed before this pin) is not needed.
+#
+# No `--tag`: DR-001 says all tags. A class-A-only offsite set would not be the copy that survives
+# losing the node — it would omit the class-C datasets, the etcd snapshot plus the k3s token/TLS, and
+# the image tarballs that can no longer be pulled from anywhere (the same reasoning recorded in DR-003).
+#
+# There is deliberately no `restic forget --prune` here. Retention is enforced on the local repository
+# by vps-backup-prune.sh; the offsite copy is the disaster-recovery copy and R2 bucket-lock rules exist
+# precisely to make deletion impossible. The consequence — the offsite repository only ever grows, and
+# whether a prune could ever run against locked objects is unvalidated (review §12.7) — is recorded in
+# README.md rather than silently ignored.
+#
+# Credentials, and the no-op on a host without them. The R2 S3 key pair, the bucket endpoint (which
+# carries the account id) and the region live in `/etc/vps-backup/r2.env` on the host — never in git or
+# SOPS, because this repo is moving public and the account id is not something to publish. The unit
+# loads that file with `EnvironmentFile=` (this role's pattern) alongside the SOPS-rendered
+# `/etc/vps-backup/env` that carries the local repository's password. With no destination configured
+# this script logs and exits 0 without invoking restic at all: the host has no R2 credentials yet, and
+# a leg that is not configured must not make the existing timers or alerts start failing. In that state
+# it also writes no metric (see the bottom of this file).
+set -uo pipefail
+
+LOCAL_REPOSITORY="{{ backup_restic_repository | default('') }}"
+# The destination normally arrives from r2.env through the unit's EnvironmentFile (`RESTIC_REPOSITORY`).
+# `backup_offsite_repository` is the Ansible-rendered fallback for a destination that carries nothing
+# host-specific; the environment wins when both are set, because that is where the account id lives.
+OFFSITE_REPOSITORY="${RESTIC_REPOSITORY:-{{ backup_offsite_repository | default('') }}}"
+OFFSITE_ENV_FILE="{{ backup_offsite_env_file }}"
+TEXTFILE_DIR="{{ backup_node_exporter_textfile_dir | default('/var/lib/node_exporter/textfile_collector') }}"
+METRIC_FILE="$TEXTFILE_DIR/vps_backup_offsite.prom"
+
+if [ -z "$OFFSITE_REPOSITORY" ]; then
+  echo "offsite destination not configured (no RESTIC_REPOSITORY in $OFFSITE_ENV_FILE and backup_offsite_repository is empty) — nothing to copy (see roles/backup/README.md)" >&2
+  exit 0
+fi
+if [ -z "$LOCAL_REPOSITORY" ]; then
+  echo "offsite destination is configured but backup_restic_repository (the copy source) is empty — refusing to run (see roles/backup/README.md)" >&2
+  exit 1
+fi
+if [ "$OFFSITE_REPOSITORY" = "$LOCAL_REPOSITORY" ]; then
+  echo "offsite destination equals the local repository ($LOCAL_REPOSITORY) — refusing to copy a repository onto itself" >&2
+  exit 1
+fi
+if [ ! -r "$OFFSITE_ENV_FILE" ]; then
+  echo "WARNING: $OFFSITE_ENV_FILE is not readable — the R2 endpoint and S3 key pair are expected there (see roles/backup/README.md)" >&2
+fi
+
+# `restic copy` authenticates against BOTH repositories, through separate variables: RESTIC_PASSWORD
+# for the destination and RESTIC_FROM_PASSWORD for the source. /etc/vps-backup/env supplies the local
+# repository's password as RESTIC_PASSWORD, so keep that value before the destination's may replace it.
+# (Omitting the source password is not an obvious failure: the destination half works and only `copy`
+# dies, with "an empty password is not allowed" — DR-003 hit exactly that on the mirror.)
+local_password="${RESTIC_PASSWORD:-}"
+if [ -z "$local_password" ]; then
+  echo "RESTIC_PASSWORD is not set — /etc/vps-backup/env is missing or the role was not run (run the playbook from ansible/) — cannot authenticate to either repository" >&2
+  exit 1
+fi
+export RESTIC_REPOSITORY="$OFFSITE_REPOSITORY"
+export RESTIC_FROM_REPOSITORY="$LOCAL_REPOSITORY"
+# An explicit value in r2.env wins; otherwise the source uses the local repository's password.
+export RESTIC_FROM_PASSWORD="${RESTIC_FROM_PASSWORD:-$local_password}"
+# The offsite repository is initialised with the same password as the local one unless the operator
+# sets RESTIC_OFFSITE_PASSWORD in r2.env (that needs a matching `restic init`/`restic key add` against
+# the destination first — README.md).
+export RESTIC_PASSWORD="${RESTIC_OFFSITE_PASSWORD:-$local_password}"
+
+# One copy at a time. The timer cannot overlap itself (systemd will not start an already-active unit),
+# but an operator's hand-run can overlap with it, and two concurrent runs against one destination
+# contend for bandwidth and memory on a node the README already calls memory-tight. Same lock pattern
+# as vps-restore-test.sh; the DR-003 mirror recorded the same lesson.
+exec 9>/var/lock/vps-backup-offsite.lock
+if ! flock -n 9; then
+  echo "another offsite copy is already running (lock held) — exiting without doing anything" >&2
+  exit 0
+fi
+
+rc=0
+echo "+ restic copy --from-repo $LOCAL_REPOSITORY (all tags)"
+restic copy --from-repo "$LOCAL_REPOSITORY" || rc=1
+
+# Only advance the metric on success: the alert is staleness-based, so a failing copy must let the
+# timestamp age rather than pretend it passed. Written only on this, the enabled, path — a leg with no
+# destination exits above and produces no series at all.
+#
+# The series carries no label, unlike vps_restore_test_last_success_timestamp{class=…}: there is
+# exactly one offsite destination, so there is nothing a label could keep apart. A second destination
+# would need one, or the two would satisfy each other's staleness alert.
+if [ "$rc" -eq 0 ]; then
+  mkdir -p "$TEXTFILE_DIR"
+  echo "vps_backup_offsite_last_success_timestamp $(date +%s)" > "$METRIC_FILE.$$"
+  mv "$METRIC_FILE.$$" "$METRIC_FILE"
+fi
+
+exit "$rc"

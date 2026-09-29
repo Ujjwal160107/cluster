@@ -1,0 +1,10 @@
+[Unit]
+Description=Run vps-backup retention weekly
+
+[Timer]
+# Monday 03:00 UTC — well clear of the class-A 15-minute cycle and the 12h etcd snapshot.
+OnCalendar=Mon *-*-* 03:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

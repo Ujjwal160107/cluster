@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/smart-home-system/api=ghcr.io/upayanmazumder/smart-home-system/api:latest@sha256:22c4db7946abb6f0570f3a835278731314132a57950de0988e99ccdac1d97373

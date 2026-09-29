@@ -1,0 +1,13 @@
+# S11 hardening: this namespace has no Ingress at all -- mochi is a Discord
+# gateway bot (DISCORD_WEBHOOK_URL in secret.yaml, outbound HTTPS only). Its
+# Service exists for in-namespace use only, so nothing legitimate ever
+# initiates ingress to these pods. Default-deny with zero allow rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mochi-default-deny-ingress
+  namespace: mochi
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

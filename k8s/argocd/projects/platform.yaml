@@ -1,0 +1,66 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: platform
+  namespace: argocd
+spec:
+  description: Cluster-wide platform infrastructure
+  sourceRepos:
+    - https://github.com/upayanmazumder/vps
+    # P6-01: added so every child can resolve from the new source of truth before the switch.
+    # `vps` stays until P8-02 — that is the rollback window (R-1), and it closes deliberately.
+    - https://github.com/upayanmazumder/cluster
+    - https://argoproj.github.io/argo-helm
+    - https://kedacore.github.io/charts
+  # S11: destinations enumerated instead of `namespace: "*"`. An app that
+  # needs a new namespace fails loudly ("namespace X is not permitted in
+  # project platform") instead of silently deploying anywhere.
+  # `namespace: ""` is required for priority-classes, which is cluster-scoped
+  # only and therefore has no destination namespace.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: ""
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    - server: https://kubernetes.default.svc
+      namespace: keda
+    - server: https://kubernetes.default.svc
+      namespace: kube-system
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+  # S11: was `group: "*" / kind: "*"`. Now exactly the cluster-scoped kinds
+  # the platform apps actually manage, taken from their live resource
+  # inventories on 2026-09-28. Anything new must be added deliberately --
+  # which is the point: this is the review gate for cluster-wide objects.
+  # A missing kind fails visibly as a SyncFailed task on that app, it does
+  # not silently mis-sync.
+  clusterResourceWhitelist:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: apiregistration.k8s.io
+      kind: APIService
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: storage.k8s.io
+      kind: StorageClass
+    - group: storage.k8s.io
+      kind: CSIDriver
+    - group: scheduling.k8s.io
+      kind: PriorityClass
+    - group: ""
+      kind: Namespace
+    - group: ""
+      kind: PersistentVolume
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  orphanedResources:
+    warn: true

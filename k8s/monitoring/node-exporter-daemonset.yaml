@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app: node-exporter
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      hostPID: true
+      # hostNetwork intentionally removed (was: true) — node-exporter only needs the /proc,/sys,/
+      # hostPath mounts below to see host-level metrics; it never needed the host network
+      # namespace. With hostNetwork:true it bound 0.0.0.0:9100 on the node's PUBLIC IP with no
+      # auth (review finding, Medium sev). The headless Service (node-exporter-service.yaml,
+      # clusterIP: None) already resolves straight to the pod IP for Prometheus's scrape target,
+      # so removing hostNetwork only removes the public exposure — internal scraping is unaffected.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:v1.6.1
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+            # Reads the Prometheus textfile metrics that host scripts write, currently
+            # vps_backup_last_success_timestamp{class} from ansible/roles/backup's vps-backup.sh.
+            # Without this the backup script's metric sat on disk unread, so a silently-failing
+            # backup was invisible (added 2026-09-28 with the alert rule below).
+            - --collector.textfile.directory=/host/textfile
+          ports:
+            - containerPort: 9100
+              name: metrics
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host/root
+              readOnly: true
+              mountPropagation: HostToContainer
+            - name: textfile
+              mountPath: /host/textfile
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 50Mi
+            limits:
+              cpu: 200m
+              memory: 100Mi
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
+        - name: textfile
+          hostPath:
+            path: /var/lib/node_exporter/textfile_collector
+            type: DirectoryOrCreate

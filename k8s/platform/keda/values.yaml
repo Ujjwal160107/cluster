@@ -1,0 +1,41 @@
+# KEDA Helm chart values.
+#
+# Chart defaults give each of the 3 control-plane components (operator,
+# metricServer, webhooks) 1 CPU / 1000Mi limits — 3 CPU / 3000Mi combined on
+# a 4 CPU / 7.75Gi single-node cluster. Actual usage is a few m CPU / tens of
+# Mi each, so pin real limits instead of the chart defaults.
+resources:
+  operator:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 192Mi
+  metricServer:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 192Mi
+  webhooks:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 128Mi
+
+# Two replicas for the metrics apiserver (chart default is 1).
+#
+# Why: this cluster has a documented namespace-deletion wedge (.claude/CLAUDE.md) — if the
+# aggregated external-metrics APIService is unavailable for even a moment while a namespace is being
+# deleted, the namespace controller records "stale GroupVersion discovery" and never retries, so it
+# hangs in Terminating forever and blocks anything new in that namespace. With a single replica, any
+# metrics-server restart created exactly that window (the APIService has no other endpoint to fall
+# back to). It has bitten S10's orphan cleanups and, on 2026-09-28, the monthly backup restore
+# drill, which deletes and recreates its own `restore-test` namespace. Two replicas mean a single
+# pod restart no longer takes the aggregated API out.
+metricsServer:
+  replicaCount: 2

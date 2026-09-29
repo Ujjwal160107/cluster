@@ -1,0 +1,25 @@
+# S11: scales via the KEDA HTTP add-on -- see
+# ../cas-api/networkpolicy.yaml for the full explanation of why the
+# interceptor (not Traefik) is the source.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: learning-qwik
+  namespace: learning-qwik
+spec:
+  podSelector:
+    matchLabels:
+      app: learning-qwik
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: interceptor
+      ports:
+        - protocol: TCP
+          port: 3000

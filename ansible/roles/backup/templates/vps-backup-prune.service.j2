@@ -1,0 +1,13 @@
+[Unit]
+Description=vps-backup retention (restic forget --prune, weekly)
+After=k3s.service
+
+[Service]
+Type=oneshot
+# systemd gives the unit no HOME, which makes restic log "unable to open cache: neither
+# $XDG_CACHE_HOME nor $HOME are defined" and re-scan the repository every run. Harmless for a local
+# repo, measurable once the repo is R2 — set it explicitly.
+Environment=HOME=/root
+# Same SOPS-rendered environment as the backup units; the `-` prefix keeps a missing file non-fatal.
+EnvironmentFile=-{{ backup_env_file }}
+ExecStart={{ backup_prune_script_path }}

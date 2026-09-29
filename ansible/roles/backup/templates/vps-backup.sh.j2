@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Managed by ansible/roles/backup — do not hand-edit on the host, edit the template and re-run.
+# Usage: vps-backup.sh <A|C>   — dumps only the targets in ansible/files/backup-targets.yaml
+# matching that class, then runs restic. etcd snapshots are handled by the separate
+# vps-etcd-snapshot.sh (its own 12h timer), not this script.
+#
+# Per-target failure does NOT abort the others; the overall script exit code is non-zero if any
+# target failed, which drives the textfile metric below (and the Prometheus alerts built on it).
+# The healthchecks.io ping that used to sit here was removed 2026-09-28 (CLEAN-002): the feature was
+# declined and the URL was permanently empty, so the ping could never run.
+
+set -uo pipefail # deliberately not -e — see per-target error handling below
+
+CLASS="${1:?usage: vps-backup.sh <A|C>}"
+STAGING_DIR="{{ backup_staging_dir }}/class-${CLASS}"
+TARGETS_FILE="{{ backup_targets_path }}"
+TEXTFILE_DIR="{{ backup_node_exporter_textfile_dir | default('/var/lib/node_exporter/textfile_collector') }}"
+RESTIC_REPOSITORY="{{ backup_restic_repository | default('') }}"
+# `restic` is a child process, so this has to be exported, not just assigned.
+[ -n "$RESTIC_REPOSITORY" ] && export RESTIC_REPOSITORY
+# `restic forget`/`prune` (retention: class A --keep-within 48h --keep-daily 30 --keep-weekly 12
+# --keep-monthly 12; class C --keep-daily 7) is a SEPARATE weekly script/timer, not run here on
+# every backup — see ansible/roles/backup/README.md.
+
+mkdir -p "$STAGING_DIR/pg" "$STAGING_DIR/mongo"
+overall_rc=0
+
+pg_dump_target() {
+  local ns="$1" workload="$2"
+  local pod
+  pod=$(kubectl get pods -n "$ns" -o name | grep "$workload" | head -1 | cut -d/ -f2) || return 1
+  kubectl exec -n "$ns" "$pod" -- sh -c '
+    set -e
+    PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -Fc "$POSTGRES_DB" -f "/tmp/backup.dump"
+    PGPASSWORD="$POSTGRES_PASSWORD" pg_dumpall -U "$POSTGRES_USER" --globals-only -f "/tmp/backup-globals.sql"
+  ' || return 1
+  kubectl cp "$ns/$pod:/tmp/backup.dump" "$STAGING_DIR/pg/${ns}-${workload}.dump" || return 1
+  kubectl cp "$ns/$pod:/tmp/backup-globals.sql" "$STAGING_DIR/pg/${ns}-${workload}-globals.sql" || return 1
+  kubectl exec -n "$ns" "$pod" -- rm -f /tmp/backup.dump /tmp/backup-globals.sql
+}
+
+mongo_dump_target() {
+  local ns="$1" workload="$2"
+  local pod
+  pod=$(kubectl get pods -n "$ns" -o name | grep "$workload" | head -1 | cut -d/ -f2) || return 1
+  # --oplog when the target asks for it: makes a replica-set dump point-in-time consistent.
+  local oplog_flag=""
+  [ "$(jq -r '.oplog // false' <<<"$target_json")" = "true" ] && oplog_flag="--oplog"
+  # shellcheck disable=SC2086
+  kubectl exec -n "$ns" "$pod" -- mongodump --archive=/tmp/backup.archive.gz --gzip $oplog_flag || return 1
+  kubectl cp "$ns/$pod:/tmp/backup.archive.gz" "$STAGING_DIR/mongo/${ns}-${workload}.archive.gz" || return 1
+  kubectl exec -n "$ns" "$pod" -- rm -f /tmp/backup.archive.gz
+}
+
+# file-engine targets need no dump step — restic reads each target's `path` directly (see the
+# `restic backup` invocation below, filtered to this class's paths from backup-targets.yaml).
+
+while IFS= read -r target_json; do
+  ns=$(jq -r .namespace <<<"$target_json")
+  workload=$(jq -r .workload <<<"$target_json")
+  engine=$(jq -r .engine <<<"$target_json")
+
+  case "$engine" in
+    postgres)
+      pg_dump_target "$ns" "$workload" || { echo "FAILED: $ns/$workload (postgres)"; overall_rc=1; }
+      ;;
+    mongo)
+      mongo_dump_target "$ns" "$workload" || { echo "FAILED: $ns/$workload (mongo)"; overall_rc=1; }
+      ;;
+    file)
+      # Targets that name a `sqlite:` file get a consistent copy taken first (SQLite's own `.backup`
+      # API), which then lands in $STAGING_DIR and is picked up by the restic invocation below.
+      # Without this, restic reads a database that may be mid-write.
+      sqlite_file=$(jq -r '.sqlite // empty' <<<"$target_json")
+      if [ -n "$sqlite_file" ]; then
+        sqlite_path="$(jq -r .path <<<"$target_json")/$sqlite_file"
+        if command -v sqlite3 >/dev/null 2>&1; then
+          sqlite3 "$sqlite_path" ".backup '$STAGING_DIR/${ns}-${workload}.db'" \
+            || { echo "FAILED: sqlite .backup of $sqlite_path"; overall_rc=1; }
+        else
+          echo "WARNING: sqlite3 not installed — $sqlite_path will be read live (possibly torn)" >&2
+          overall_rc=1
+        fi
+      fi
+      ;;
+  esac
+done < <(yq -o=json ".[] | select(.class == \"$CLASS\")" "$TARGETS_FILE" | jq -c .)
+
+FILE_PATHS=$(yq -o=json ".[] | select(.class == \"$CLASS\" and .engine == \"file\") | .path" "$TARGETS_FILE" | jq -r .)
+
+# For targets that declare a `sqlite:` file we stored a consistent copy in $STAGING_DIR, so the live
+# database must be excluded: restic reading a mid-write sqlite file produces a torn artifact that
+# *looks* like a backup of that database. The rest of such a directory is still backed up normally.
+SQLITE_EXCLUDES=""
+while IFS= read -r sqlite_target; do
+  [ -z "$sqlite_target" ] && continue
+  t_path=$(jq -r .path <<<"$sqlite_target")
+  t_db=$(jq -r .sqlite <<<"$sqlite_target")
+  SQLITE_EXCLUDES="$SQLITE_EXCLUDES --exclude $t_path/$t_db"
+done < <(yq -o=json ".[] | select(.class == \"$CLASS\" and .engine == \"file\" and (.sqlite // \"\") != \"\")" "$TARGETS_FILE" | jq -c .)
+
+if [ -n "$RESTIC_REPOSITORY" ]; then
+  # shellcheck disable=SC2086
+  # (That directive must be alone on its line: shellcheck parses everything after the code list as
+  # a key=value pair and reports SC1125 — "Invalid key=value pair? Ignoring the rest of this
+  # directive" — which means the directive silently did nothing. Found by CI-007's shellcheck run.)
+  # FILE_PATHS and SQLITE_EXCLUDES are intentionally word-split.
+  restic backup "$STAGING_DIR" $FILE_PATHS $SQLITE_EXCLUDES --tag "class-${CLASS}" --tag "$(date +%Y-%m-%d)" \
+    || { echo "FAILED: restic backup"; overall_rc=1; }
+else
+  echo "restic_repository not set — S2 (R2 bucket)/S5 (SOPS creds) not applied yet, skipping restic step" >&2
+fi
+
+mkdir -p "$TEXTFILE_DIR"
+if [ "$overall_rc" -eq 0 ]; then
+  echo "vps_backup_last_success_timestamp{class=\"${CLASS}\"} $(date +%s)" > "$TEXTFILE_DIR/vps_backup_class_${CLASS}.prom.$$"
+  mv "$TEXTFILE_DIR/vps_backup_class_${CLASS}.prom.$$" "$TEXTFILE_DIR/vps_backup_class_${CLASS}.prom"
+fi
+
+# A non-zero exit here is what makes a failed run visible; the metric above only records success.
+exit "$overall_rc"

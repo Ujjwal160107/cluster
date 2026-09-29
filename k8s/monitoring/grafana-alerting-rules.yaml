@@ -1,0 +1,1356 @@
+apiVersion: 1
+groups:
+- orgId: 1
+  name: cluster-health
+  folder: Monitoring
+  interval: 1m
+  rules:
+  - uid: node-memory-high
+    title: Node memory usage above 85%
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 5m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: Node memory usage is above 85% for 5+ minutes. {{ $values.B }}
+  - uid: node-cpu-high
+    title: Node CPU usage above 85%
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 5m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: Node CPU usage is above 85% for 5+ minutes.
+  - uid: pod-crashloopbackoff
+    title: Pod in CrashLoopBackOff
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (namespace, pod) (kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"})
+          == 1
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 2m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'A pod has been CrashLoopBackOff for 2+ minutes: {{ $labels.namespace }}/{{ $labels.pod
+        }}'
+  - uid: pod-oomkilled
+    title: Pod container OOMKilled
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (namespace, pod, container) (kube_pod_container_status_last_terminated_reason{reason="OOMKilled"})
+          == 1
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 0m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'A container was OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container
+        }}'
+  - uid: pvc-almost-full
+    title: PersistentVolumeClaim above 85% full
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes)
+          > 0.85
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'PVC is above 85% full: {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }}'
+  - uid: tls-cert-expiring
+    title: TLS certificate expiring within 60 days
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        # CLEAN-002 (2026-09-28). This rule used to watch
+        # `certmanager_certificate_expiration_timestamp_seconds` — but cert-manager was removed on
+        # 2026-09-28, so it was watching a metric that no longer exists, while the certificate
+        # actually in use expired in ONE year rather than the 2041 the documentation claimed. The
+        # requirement it now serves is concrete: the Origin CA wildcard the origin serves expires
+        # 2027-09-28 and nothing renews it automatically.
+        #
+        # `traefik_tls_certs_not_after` is the expiry of the certificate Traefik has *loaded*, i.e.
+        # what it serves — the thing that actually matters, rather than what some controller intended.
+        #
+        # `min by (sans)` is deliberate, for two different reasons:
+        #   1. Traefik exports one series per loaded certificate *and* the pod is scraped twice
+        #      (`job=traefik` and `job=kubernetes-pods`), so this dedupes duplicates;
+        #   2. it selects the SOONEST expiry per SAN set. Taking the maximum, or matching one series,
+        #      would report a long-dated certificate and miss a near one — which is precisely what
+        #      happens while Traefik still holds a superseded leaf: its certificate store is additive,
+        #      so a rotation needs a Traefik restart to drop the old certificate (see
+        #      `docs/runbooks/rotate-certificates.md`). Verified against live Prometheus on
+        #      2026-09-28, when it correctly returned 364.8 days and ignored a stale 2041 entry.
+        expr: (min by (sans) (traefik_tls_certs_not_after) - time()) / 86400 < 60
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 1h
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'TLS certificate for [{{ $labels.sans }}] expires in under 60 days — renew the Cloudflare Origin CA certificate: docs/runbooks/rotate-certificates.md'
+  - uid: argocd-app-degraded
+    title: ArgoCD application Degraded
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (name) (argocd_app_info{health_status="Degraded"}) == 1
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'ArgoCD app has been Degraded for 10+ minutes: {{ $labels.name }}'
+  - uid: argocd-app-outofsync
+    title: ArgoCD application OutOfSync
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (name) (argocd_app_info{sync_status="OutOfSync"}) == 1
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'ArgoCD app has been OutOfSync for 10+ minutes: {{ $labels.name }}'
+  - uid: keda-lowpriority-scaling
+    title: Low-priority app scaled up from zero
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (namespace, deployment) (kube_deployment_status_replicas{namespace=~"cas-api|dj-html-nodejs-web|learning-docker|learning-qwik|smart-home-system-api|upayan-v5|kodesphere"})
+          > 0
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 0m
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: info
+    annotations:
+      summary: 'Low-priority app woke up (scaled from 0): {{ $labels.namespace }}/{{ $labels.deployment
+        }}. Resolves automatically once it scales back to 0.'
+  - uid: vcap-staging-job-failed
+    title: VCAP staging Job failed (watchdog/orphan-sweep CronJobs)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: max by (namespace, job_name) (kube_job_status_failed{namespace="vcap-staging"})
+          == 1
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 0m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'A Job failed in vcap-staging (watchdog or orphan-sweep CronJob): {{ $labels.job_name
+        }}. Was silently failing every 5 minutes for ~20h before this alert existed
+        (2026-09-05 incident).'
+  - uid: disk-root-high
+    title: Root filesystem above 80% full
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}))
+          > 0.80
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: Root filesystem (/) is above 80% full for 10+ minutes.
+  - uid: inodes-root-high
+    title: Root filesystem inodes above 80% used
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (1 - (node_filesystem_files_free{mountpoint="/"} / node_filesystem_files{mountpoint="/"}))
+          > 0.80
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: Root filesystem (/) inode usage is above 80% for 10+ minutes.
+  - uid: node-not-ready
+    title: Node NotReady
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 2m
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'Node {{ $labels.node }} has been NotReady for 2+ minutes.'
+  - uid: prometheus-target-down
+    title: Prometheus scrape target down
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: up == 0
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 5m
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'Prometheus scrape target down for 5+ minutes: job={{ $labels.job }} instance={{ $labels.instance }}'
+  - uid: vps-backup-classa-stale
+    title: VPS backup (class A) has not succeeded in over an hour
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (time() - vps_backup_last_success_timestamp{class="A"}) > 2700
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    # No data is itself a failure here: the metric only exists while a backup has succeeded since
+    # the last node-exporter restart, so a vanished series means backups are not running — unlike
+    # the other rules, where silence is normal. Added 2026-09-28 with the vps-backup timers.
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'No successful class-A backup (vcap-staging Postgres+MinIO, meghmitra Postgres) for over 45 minutes (three missed 15-minute runs); Check `systemctl status vps-backup-classA` and `journalctl -u vps-backup-classA` on the node.'
+  - uid: vps-backup-classc-stale
+    title: VPS backup (class C) has not succeeded in over 36 hours
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (time() - vps_backup_last_success_timestamp{class="C"}) > 93600
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    # No data is itself a failure here: the metric only exists while a backup has succeeded since
+    # the last node-exporter restart, so a vanished series means backups are not running — unlike
+    # the other rules, where silence is normal. Added 2026-09-28 with the vps-backup timers.
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'No successful class-C backup (bitvault, vcap-dev, rankstack, grafana) in 26h; the timer runs daily. Check `systemctl status vps-backup-classC` on the node.'
+  - uid: vps-restic-check-stale
+    title: VPS backup repository integrity check has not passed in over 10 days
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (time() - vps_restic_check_last_success_timestamp) > 864000
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 15m
+    # No data is a failure for these too: each metric only exists while its job has succeeded since
+    # the last node-exporter restart, so a missing series means it is not running (added 2026-09-28
+    # with the restic-check, restore-drill and etcd-offsite jobs).
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'The weekly `restic check` (+10% data read) has not succeeded in 10 days, so repository corruption would now go unnoticed until a restore is attempted. Run `systemctl start vps-restic-check.service` and read `journalctl -u vps-restic-check` on the node.'
+  - uid: vps-restore-test-stale
+    title: VPS backup restore drill has not passed in over 40 days
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (time() - vps_restore_test_last_success_timestamp) > 3456000
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 15m
+    # No data is a failure for these too: each metric only exists while its job has succeeded since
+    # the last node-exporter restart, so a missing series means it is not running (added 2026-09-28
+    # with the restic-check, restore-drill and etcd-offsite jobs).
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'The monthly restore drill has not succeeded in 40 days — the backups are unproven, which is the state that hides a broken backup. Run `systemctl start vps-restore-test.service` and read its journal on the node.'
+  - uid: vps-etcd-snapshot-stale
+    title: etcd snapshot (and k3s token/TLS) has not been pushed in over 36 hours
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (time() - vps_etcd_snapshot_last_success_timestamp) > 129600
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 15m
+    # No data is a failure for these too: each metric only exists while its job has succeeded since
+    # the last node-exporter restart, so a missing series means it is not running (added 2026-09-28
+    # with the restic-check, restore-drill and etcd-offsite jobs).
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: critical
+    annotations:
+      summary: 'The 12h etcd snapshot/offsite push has not succeeded in 36h. Losing etcd means losing all cluster state, and the k3s token/TLS in the same snapshot is what makes a restore possible. Check `journalctl -u vps-etcd-snapshot` on the node.'
+  - uid: vps-backup-offsite-stale
+    title: VPS backup offsite copy (R2) has not succeeded in over 4 hours
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: (time() - vps_backup_offsite_last_success_timestamp) > 14400
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 15m
+    # No data is a failure here too, like the other backup staleness rules — and today it is *the*
+    # state: the offsite leg (DR-001) is deployed but not enabled, because the R2 S3 credentials do not
+    # exist yet, so the script is a deliberate no-op that writes no series at all. Firing is the honest
+    # reading of that — "there is no offsite copy" is true, and it is the gap CLAUDE.md and
+    # docs/disaster-recovery.md already record ("backups do not survive losing the node"). It goes
+    # quiet with the first successful copy; enabling it is documented in ansible/roles/backup/README.md.
+    # Severity is warning rather than critical for the same reason the integrity-check and drill rules
+    # are: the local repository still holds every snapshot, so a stale offsite copy widens the
+    # disaster-recovery window rather than losing data now — the critical rules are the ones whose
+    # failure means the only copy stops being written.
+        # `NoData: OK` here, deliberately, unlike the other staleness rules above. This series only exists
+    # once a copy has SUCCEEDED, and the role's README has the operator prove one manual run before
+    # enabling the timer — so "no series" means "not set up yet", not "broken". With the other rules'
+    # `Alerting` this would fire from the moment it syncs until the R2 credentials arrive, which is an
+    # alert nobody can resolve; a known-firing alert is one people learn to ignore. Once the leg is
+    # enabled, a *stale* series still fires, which is the case DR-001 actually wants caught.
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'The hourly offsite copy of the backup repository to Cloudflare R2 has not succeeded in 4 hours (or has never run — the leg is credential-gated and writes no metric until it is enabled). Until it does, the only copy of the backups is on the node itself, so losing the node loses them. Check `systemctl status vps-backup-offsite` and `journalctl -u vps-backup-offsite` on the node; enablement is in ansible/roles/backup/README.md.'
+  - uid: loki-ingestion-stopped
+    title: Loki has received no log data for 30 minutes
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        expr: sum(rate(loki_distributor_bytes_received_total[15m])) == 0
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 15m
+    # No data is a failure here too: if the series vanishes, Loki is down or no longer scraped, and
+    # either way log shipping is unwatched. (Added with the scrape job — before that, Prometheus held
+    # zero loki_ series, so this alert would have been inert.)
+    noDataState: Alerting
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'Loki has received no bytes for 30 minutes — logs are not being shipped (Promtail down, Loki down, or the scrape broken).'
+  - uid: pod-image-pull-failing
+    title: A pod cannot pull its container image
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: prometheus
+      model:
+        editorMode: code
+        # ImagePullBackOff/CreateContainerConfigError are invisible today: nothing alerts on them, and
+        # on 2026-09-28 the audit that produced this rule found vcap's worker image absent from the
+        # node cache *and* unpullable - a KEDA scale-from-zero component that will simply fail the
+        # next time it scales up. This is the rule that would have said so.
+        expr: |
+          max by (namespace, pod, reason) (
+            kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull|CreateContainerConfigError|CreateContainerError"}
+          ) > 0
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: A
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+        refId: B
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+          operator:
+            type: and
+          query:
+            params:
+            - C
+          reducer:
+            type: last
+            params: []
+        refId: C
+    for: 10m
+    noDataState: OK
+    execErrState: Error
+    labels:
+      severity: warning
+    annotations:
+      summary: 'Pod {{ $labels.namespace }}/{{ $labels.pod }} cannot pull its image ({{ $labels.reason }}) for 10m — check the registry credentials and whether the image still exists.'
+

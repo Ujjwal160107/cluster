@@ -1,0 +1,77 @@
+---
+# Non-secret host configuration. Secrets — the host's restic repository password and the Tailscale
+# auth key, among others — live in `group_vars/vps/secrets.sops.yaml`, SOPS/age-encrypted (S5, live
+# since 2026-09-28) and read by the `community.sops` vars plugin. Never add a plaintext secrets file
+# here. The R2 backup credentials are deliberately *not* here: they are host-local only, in
+# `/etc/vps-backup/r2.env`, and never pass through Ansible, SOPS or git.
+
+hetzner_server_id: 122385524
+k3s_version: "v1.34.4+k3s1" # pinned; the k3s role refuses to run the installer if already at this version
+
+# base role
+journald_system_max_use: "500M"
+atop_retention_days: 7
+sshd_x11_forwarding: false
+
+# k3s role — reproduces the exact live flags (verified via
+# `systemctl cat k3s` -> /etc/systemd/system/k3s.service.d/tailscale.conf on 2026-09-27).
+# The role migrates these from that systemd drop-in into /etc/rancher/k3s/config.yaml (k3s's
+# supported config-file mechanism) with NO flag value changes — only the delivery mechanism
+# changes. This still requires a k3s restart to take effect (⚠️ gated, see roles/k3s/README.md).
+#
+# P4-03 (2026-09-29): k3s_node_ip and k3s_node_external_ip are no longer hard-coded here. They are
+# derived by the k3s role (defaults/main.yml): node-ip = ansible_default_ipv4.address, external-ip =
+# the tailnet address read after the tailscale role. On this host that renders the same values this
+# file used to pin (138.201.157.147 / 100.96.250.81), so the config stays byte-identical. Override
+# with `-e k3s_node_ip=…` if a host's default route is not the address to advertise.
+k3s_tls_san: vps.upayan.dev
+k3s_flannel_iface: tailscale0
+k3s_kubelet_image_gc_high_threshold: 75
+k3s_kubelet_image_gc_low_threshold: 60
+# ANS-001: both default to false, and both are safety properties rather than preferences.
+#
+# `k3s_install_missing`: install k3s at `k3s_version` when it is absent. Only ever true for a FRESH
+# host (the DR path, docs/runbooks/recover-vm.md). False here means the live node cannot be installed
+# over, or upgraded, by running this playbook.
+k3s_install_missing: false
+# `k3s_allow_restart`: apply the rendered config and restart k3s when it differs. Restarting the
+# control plane on a single node is a brief total outage, and the role snapshots etcd first. Left
+# false so that a config sync never restarts anything by surprise.
+k3s_allow_restart: false
+
+# backup role — restic repository
+# INTERIM (2026-09-28): a local repository on the root disk, deliberately on a *different* device
+# from /srv/data so it survives a vps-data problem and covers the common loss modes (accidental
+# deletion, a bad migration, logical corruption). It does NOT survive losing the host, which is what
+# the S4 target (Cloudflare R2, bucket `vps-backups`, already created by Terraform in S2) is for.
+# R2 state verified 2026-09-28: bucket `vps-backups` exists (region WEUR, Standard) and is **empty** —
+# 0 objects, 0 bytes, 0 uploads — i.e. the offsite leg has never run. The API cannot mint long-lived
+# R2 S3 keys (only temporary credentials), so the owner must create them in the dashboard:
+# R2 → Manage R2 API Tokens → Create API Token, scoped to `vps-backups` with Object Read & Write.
+# Switching to R2 is: set this to s3:https://<account-id>.r2.cloudflarestorage.com/vps-backups, add
+# the R2 keys to group_vars/vps/secrets.sops.yaml as r2_access_key_id/r2_secret_access_key, re-run
+# this role, `restic init` the new repo, then point the timers at it.
+backup_restic_repository: /var/backups/restic
+
+# ANS-004: pinned. Verified installed on the node 2026-09-28 (`dpkg-query -W restic` — Ubuntu 24.04).
+# restic *writes* the repository, so its version is part of the backups' provenance. If apt ever
+# cannot satisfy this pin, that is a deliberate stop rather than a bug: find out what superseded it,
+# bump this, and re-run the restore drill (`vps-restore-test`) before trusting the new version.
+restic_version: "0.16.4-2ubuntu0.24.04.3"
+
+# tailscale role — ANS-002
+# `tailscale_auth_key` lives in group_vars/vps/secrets.sops.yaml (SOPS), with no placeholder here for
+# the same reason `admin_ssh_public_key` has none: one source, instead of relying on group_vars
+# precedence for the encrypted value to beat an empty string. Absent or empty simply means the role
+# will not run `tailscale up`, which is the correct behaviour on the live node. A fresh node needs the
+# owner to mint a key in the Tailscale admin console first.
+
+# admin_user role
+admin_username: upayan
+# `admin_ssh_public_key` lives in group_vars/vps/secrets.sops.yaml (SOPS-encrypted) and deliberately has
+# no placeholder here — the role's own instruction, and it keeps one source for the value instead of
+# relying on alphabetical group_vars precedence to let the encrypted file win over an empty string.
+# Set 2026-09-28 to the workstation's Hetzner SSH public key, which was verified to be the node's
+# only authorized key (fingerprint matched against /root/.ssh/authorized_keys), so enabling the role
+# grants `upayan` exactly the access root has today rather than introducing a second key. A public key
+# is not secret; it is in the encrypted file only because that is where this repo keeps the role's inputs.

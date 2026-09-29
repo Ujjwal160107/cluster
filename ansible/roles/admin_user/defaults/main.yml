@@ -1,0 +1,8 @@
+---
+# P4-06 (2026-09-29): the admin user is gated until P7-N5 proves it. Creating `upayan` and granting
+# it NOPASSWD sudo is a real access change; until the root-login cutover it is not needed for the
+# node to work, and in `--check` mode it used to fail outright ("Authorize the admin SSH key":
+# "Either user must exist or you must provide full path to key file in check mode") because check
+# mode does not create the user the next task then authorizes. Default false so the live run and the
+# check run both converge; set `-e admin_user_enabled=true` once P7-N5 is being executed.
+admin_user_enabled: false

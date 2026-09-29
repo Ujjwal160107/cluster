@@ -1,0 +1,76 @@
+# Git-tracked registry of what vps-backup.sh dumps before handing off to restic.
+# Source: docs/storage.md (per-dataset table) + docs/plans/2026-09-27-architecture-review.md §12.
+#
+# class: A (15-min interval, long retention) | C (daily, short retention, best-effort)
+# engine: postgres | mongo | file (restic reads the path directly, no dump step)
+#
+# Every `path:` below was checked against the live host on 2026-09-28, because a wrong path here does
+# not fail loudly — restic reports the missing path and the rest of the snapshot looks fine, so a
+# typo means silently backing up nothing. Re-check after any S8-style storage move.
+
+- namespace: vcap-staging
+  workload: vcap-backend-staging-postgres
+  engine: postgres
+  db_env_secret: backend-env # POSTGRES_DB/USER/PASSWORD keys
+  class: A
+
+- namespace: vcap-staging
+  workload: vcap-backend-staging-minio
+  engine: file
+  path: /srv/data/vcap-staging/minio # verified on the host 2026-09-28 (7.7 MB; the rest of the
+       # app's data dir is the postgres cluster, which the pg_dump target above covers logically)
+  class: A
+
+- namespace: meghmitra
+  workload: meghmitra-postgres
+  engine: postgres
+  db_env_secret: meghmitra-postgres-env
+  class: A
+
+- namespace: vcap-dev
+  workload: vcap-backend-dev-postgres
+  engine: postgres
+  db_env_secret: backend-env
+  class: C
+
+- namespace: vcap-dev
+  workload: vcap-backend-dev-minio
+  engine: file
+  path: /srv/data/vcap-dev/minio # verified on the host 2026-09-28 (1.2 MB)
+  class: C
+
+- namespace: bitvault
+  workload: bitvault-postgres
+  engine: postgres
+  db_env_secret: bitvault-postgres-env
+  class: C
+
+- namespace: bitvault
+  workload: bitvault-minio
+  engine: file
+  path: /var/lib/rancher/k3s/storage/pvc-acbed98f-94ef-414e-a6bf-ad69882db2d7_bitvault_bitvault-minio-pvc
+  class: C
+
+- namespace: rankstack
+  workload: rankstack-mongo
+  engine: mongo
+  class: C
+  # rs0 was fixed in S13, so the spec's "with --oplog" now applies: it captures the oplog alongside
+  # the dump, which is what makes a replica-set dump point-in-time consistent. Verified working in
+  # the pod 2026-09-28 ("dumped 1 oplog entry"). The database itself is empty (0 documents), so this
+  # is consistency insurance rather than a data-volume concern.
+  oplog: true
+
+# hello-kitty (retired 2026-09-28) was removed here by CLEAN-002. Its PV is `Released` and the
+# directory below it belongs to an app that no longer runs — a target that backs up nothing while
+# looking like coverage, which is the failure mode this registry's header warns about.
+
+- namespace: monitoring
+  workload: grafana
+  engine: file
+  path: /var/lib/k8s-monitoring/grafana
+  class: C
+  # `sqlite:` makes the backup script take a consistent copy with `sqlite3 .backup` into the staging
+  # dir first (implemented 2026-09-28). restic then reads that copy, not a file Grafana may be
+  # mid-write on — a torn sqlite file is a backup that lies about being restorable.
+  sqlite: grafana.db

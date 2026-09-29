@@ -1,0 +1,229 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  kustomize-and-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl (provides `kubectl kustomize`)
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.34.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: Render every kustomization directory (including the ksops ones — CI-001)
+        # `kubectl kustomize` cannot run the ksops exec plugin (no age key in CI), which is why the
+        # 15 directories whose Secret comes from a ksops generator used to be skipped outright.
+        # scripts/render-all.sh copies each directory to a temp tree, drops only the ksops entry from
+        # `generators:`, and renders the rest — so a typo in one of those directories now fails here
+        # instead of on the cluster. The Secret that the dropped generator would have produced is
+        # validated by scripts/check-secrets.sh below (real sops+age metadata, no decryption).
+        run: |
+          bash scripts/render-all.sh /tmp/all-manifests.yaml
+          echo "rendered $(grep -c '^kind:' /tmp/all-manifests.yaml) manifests from $(find k8s -name kustomization.yaml | wc -l) directories"
+
+      # CI-003 (2026-09-28): the Helm-sourced apps hold only a values overlay here — the chart lives in
+      # a Helm repo or another Git repo — and nothing in CI looked at that combination, so a bad values
+      # key arrived as a failed or silently different sync. Renders with each app's real values, and the
+      # output joins the Kustomize stream below for schema validation.
+      - name: Render the Helm-sourced Applications with their real values (CI-003)
+        run: |
+          bash scripts/helm-template-all.sh /tmp/helm-manifests.yaml
+          echo "rendered $(grep -c '^kind:' /tmp/helm-manifests.yaml) manifests from the Helm-sourced apps"
+
+      - name: SOPS-encrypted secrets have valid sops+age metadata
+        run: bash scripts/check-secrets.sh
+
+      - name: kubeconform schema validation
+        # Both streams: the Kustomize renders and the Helm renders, so a rendered manifest from either
+        # path is schema-checked.
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas -skip CustomResourceDefinition \
+            /tmp/all-manifests.yaml /tmp/helm-manifests.yaml
+
+      - name: Port registry check
+        run: python3 scripts/check-ports.py
+
+      # CI-002 (partial, 2026-09-28): ArgoCD resolves an Application's `path` at sync time, so a typo
+      # or a directory deleted without its Application/ApplicationSet element shows up as a comparison
+      # error on the cluster instead of a failure in review. This also catches the reverse — an app
+      # directory nothing claims, which is silently undeployed (how `cheatsheet` sat in the tree after
+      # its element was removed).
+      - name: Application paths and app directories are accounted for
+        run: python3 scripts/check-app-paths.py
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.7"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+      # CI-007 (2026-09-28). Pinned like the other CI tools. `terraform validate` checks syntax and
+      # internal consistency; tflint's bundled ruleset caught the first real thing here — four
+      # unreferenced variables and a declared-but-unused Access allow-list whose default was a personal
+      # email (the variable stays as a seam for NET-004, which is why that one rule is off in
+      # terraform/.tflint.hcl, with the reason written there).
+      - name: Install tflint (pinned)
+        run: |
+          curl -fsSL https://github.com/terraform-linters/tflint/releases/download/v0.64.0/tflint_linux_amd64.zip -o /tmp/tflint.zip
+          unzip -qo -d /tmp/tflint /tmp/tflint.zip
+          sudo install /tmp/tflint/tflint /usr/local/bin/tflint
+      - name: tflint
+        working-directory: terraform
+        run: tflint --no-color
+
+  ansible:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Pinned like the other linters (CI-007), and for the same reason: these two ran unpinned, so a
+      # PyPI release could change what CI accepts without any commit here. They also print their
+      # versions, because the run that failed on 2026-09-28 gave no way to tell which ansible-lint was
+      # judging the tree — the first thing needed when a lint failure has to be reproduced locally.
+      - run: pip install 'ansible-core==2.21.4' 'ansible-lint==26.9.0'
+      - run: |
+          ansible --version | head -1
+          ansible-lint --version | head -1
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: ansible-playbook site.yml --syntax-check
+      # Neither of the two checks above renders Jinja, so a template with a syntax error passes both
+      # and only fails when the role runs against a host. That is how a `${#...}` array expansion
+      # reached a live playbook on 2026-09-28 ("Missing end of comment tag").
+      - run: python3 ../scripts/check-ansible-templates.py .
+      - run: ansible-lint site.yml
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # CI-007 (2026-09-28). Pinned, like the other tools in this workflow.
+      - name: Install shellcheck (pinned)
+        run: |
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            | tar -xJ -C /tmp
+          sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version | sed -n '2p'
+
+      # Covers scripts/*.sh AND the Ansible shell templates, with Jinja expressions substituted (CI
+      # holds no age key, so those templates cannot be rendered). It found two `# shellcheck` directives
+      # whose prose on the same line made shellcheck ignore them entirely (SC1125) — a suppression that
+      # silently did nothing, which is worse than none.
+      - name: shellcheck (scripts + Ansible shell templates)
+        run: bash scripts/check-shellcheck.sh
+
+      # The config is deliberately narrow: yamllint's defaults flag ~968 lines in k8s/ here, almost all
+      # style, and a lint step that cries wolf is one that gets disabled along with the checks that
+      # matter. What stays on is what finds mistakes — duplicate keys, malformed structure, a missing
+      # final newline. Generated files (the vendored hetzner-csi render) are excluded, not silenced.
+      - name: yamllint (.yamllint)
+        run: |
+          # Bumped to 1.38.0 alongside pinning ansible-lint (26.9.0 requires yamllint>=1.38.0). They run
+          # in separate jobs so the mismatch was harmless, but two pins that disagree in one workflow is a
+          # trap for whoever merges them later.
+          pip install --quiet 'yamllint==1.38.0'
+          yamllint -c .yamllint -f parsable k8s ansible terraform .github inventory
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Working tree only — deliberately NOT git history. History still holds the
+      # pre-S5 plaintext Secret manifests and the private key of the certificate
+      # the origin was serving (k8s/traefik/key.pem, removed 2026-09-28), so a
+      # history scan cannot pass until S5's rotation and the `git filter-repo`
+      # rewrite are done. See docs/runbooks/rotate-secrets.md.
+      #
+      # Version is pinned so local runs and CI agree; run it locally with:
+      #   docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+      #     dir . --config .gitleaks.toml --redact
+      - name: gitleaks (working tree)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:v8.30.1 dir . \
+              --config .gitleaks.toml --redact --no-banner --verbose
+
+# Still deferred (per docs/plans/2026-09-27-architecture-review.md §17 S11):
+#   - gitleaks over full git *history*. Blocked on the same rotation + rewrite as
+#     above; until then it would only re-report the known, accepted findings.
+
+  # CI-004: history mode, and only in the *published* repository.
+  #
+  # The private repository scans its working tree only, deliberately: its history still holds the pre-S5
+  # plaintext Secret manifests and the private key the origin served, so a history scan there cannot pass
+  # until the rotation and the `git filter-repo` rewrite in docs/runbooks/rotate-secrets.md are done. The
+  # published repository is the opposite case — it was seeded with fresh history, one commit and no parent —
+  # so this scan is meaningful there and nowhere else: it proves no secret ever entered it, which is a claim
+  # only a history scan can make. It is skipped, not failed, anywhere else.
+  #
+  # No secret-path allowlists beyond the one `.gitleaks.toml` documents for SOPS *ciphertext* (which
+  # check-secrets.sh separately validates as real sops+age metadata). The test that this is not a rubber
+  # stamp is CI-004's own: a planted fake token in a commit must fail it.
+  secret-scan-history:
+    if: github.repository == 'upayanmazumder/cluster'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the entire point of this job
+
+      - name: gitleaks (git history)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:v8.30.1 git /repo \
+              --config /repo/.gitleaks.toml --redact --no-banner --verbose
+
+  # P5-04: the gate that outlives the private repository.
+  #
+  # The private `vps` repository builds this one through an export that runs a redaction check
+  # containing the terms to look for. After `vps` is archived (P8-05) that check goes with it, so the
+  # published repository needs its own — one that can *ship*, which means one that holds no terms.
+  # The terms come from the Actions secret `REDACTION_TERMS` (also in the password manager) and the
+  # script refuses to run without them rather than reporting a clean tree it never examined.
+  #
+  # `--history` scans every commit, which is the half a working-tree scan cannot do: a term that was
+  # committed and then removed is still published. `fetch-depth: 0` is required for that and is the
+  # whole point of the job.
+  #
+  # Deliberately guarded to the published repository, like the history secret scan above and for a
+  # related reason: this repository's *own* tree is allowed to contain the terms — `docs/plans/`
+  # names them in prose, which is the documentation of the policy. A gate that reddens the private
+  # repository for containing the list it exists to enforce would be switched off within a day. What
+  # the gate is for is the public tree and its history, and that is the one it runs against.
+  # It fails closed: an unset secret is a red run, not a skipped one.
+  redaction:
+    if: github.repository == 'upayanmazumder/cluster'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # --history needs every commit
+      - name: Redaction gate (tree + history)
+        env:
+          REDACTION_TERMS: ${{ secrets.REDACTION_TERMS }}
+        run: sh scripts/check-redaction.sh --history

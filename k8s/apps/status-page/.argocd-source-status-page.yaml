@@ -1,0 +1,4 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/status-page/api=ghcr.io/upayanmazumder/status-page/api:latest@sha256:7fb858bfe139f368fa306d981ec788fcb537c46b21de0e0e70ede36fc8617e3c
+  - ghcr.io/upayanmazumder/status-page/app=ghcr.io/upayanmazumder/status-page/app:latest@sha256:10cdf4291653f3e564eccd9fabb7bdf3685b9bc265599ce05da8f3f4678cd0ab

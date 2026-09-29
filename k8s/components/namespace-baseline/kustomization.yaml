@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# CLUSTER-001: the app namespace and its Pod Security Admission labels. They were duplicated
+# byte-for-byte — bar the `name:` line — in 14 per-app `namespace.yaml` files, which is the whole
+# reason this component exists.
+#
+# No parameter is needed: kustomize's `namespace:` transformer renames a `kind: Namespace` object, so
+# the parent kustomization's `namespace: <app>` supplies the name. Verified before adopting it —
+# `kubectl kustomize` renders the Namespace as the parent's namespace, and every app's render is
+# byte-identical before and after (see the changelog).
+#
+# The name below is therefore a PLACEHOLDER. A kustomization that includes this component without
+# setting `namespace:` produces a namespace literally called
+# `namespace-baseline-placeholder` — visibly wrong rather than quietly reusing a real app's namespace.
+resources:
+  - namespace.yaml

@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/learning-docker=ghcr.io/upayanmazumder/learning-docker:latest@sha256:f6161603906793b184ceb6f493600abd9749ef3d31d6531c68445472b9002503

@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/devjourney/learning-react=ghcr.io/upayanmazumder/devjourney/learning-react:latest@sha256:dcfd475f8c64a174ba1df34aa77445c139d411bceec117f873cf7b3001cd95b5

@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+  annotations:
+    # ArgoCD applies changes as a merge patch, which never *removes* a field — and this Deployment
+    # carries a stale `strategy.rollingUpdate` from its RollingUpdate days, which the API rejects
+    # alongside `type: Recreate`. An explicit `rollingUpdate: null` is stripped during rendering, so
+    # the field survived and the apply kept failing ("may not be specified when strategy type is
+    # 'Recreate'"). Replace=true makes ArgoCD replace the whole object for this resource only, which
+    # does drop it. Scoped to this Deployment deliberately: a replace discards fields absent from the
+    # manifest, which is safe here (one replica, no HPA, no controller-added spec fields).
+    argocd.argoproj.io/sync-options: Replace=true
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: Grafana's state is a sqlite file on an RWO volume. A rolling update
+  # can briefly run two Grafana processes against the same database file (single-node RWO is not
+  # enforced across two pods on the same node), which is a corruption risk for no benefit at
+  # replicas: 1.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      securityContext:
+        fsGroup: 472
+      initContainers:
+        # Plan §13: git/SOPS stays the single source of the admin password. Grafana reads
+        # GF_SECURITY_ADMIN_PASSWORD only when it *creates* its sqlite database; afterwards the
+        # password lives in the database, so a password changed in the UI silently diverges from git
+        # (this happened twice, and the split-brain broke the user-provisioning Job with 401s until
+        # someone reset it by hand). Resetting from the Secret on every start makes the Secret
+        # authoritative — change it in git, never in the UI.
+        #
+        # Verified before adding, against a copy of the live database: the binary is on PATH at
+        # /usr/share/grafana/bin/grafana, the reset exits 0 and modifies the database, and the
+        # no-database branch is a no-op so a fresh install still takes its first password from the
+        # env var. A failing reset aborts the start loudly rather than leaving a wrong password.
+        - name: reset-admin-password
+          image: grafana/grafana:11.5.2
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              if [ -f /var/lib/grafana/grafana.db ]; then
+                tr -d '\n' < /etc/grafana-admin/admin-password \
+                  | grafana cli --homepath /usr/share/grafana admin reset-admin-password --password-from-stdin
+                echo "admin password reset from the Secret"
+              else
+                echo "no grafana.db yet — first start will use GF_SECURITY_ADMIN_PASSWORD"
+              fi
+          securityContext:
+            runAsUser: 472
+            runAsGroup: 472
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+            - name: grafana-admin-secret
+              mountPath: /etc/grafana-admin
+              readOnly: true
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.5.2
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-user
+            # The Discord webhook for the alerting contact point lives in SOPS, not in the provisioning
+            # file Grafana applies: `grafana-alerting-contactpoints.yaml` refers to $DISCORD_WEBHOOK_URL and
+            # provisioning interpolates it here (Grafana docs: env lookups work in all provisioning files).
+            # SEC-002, 2026-09-29 — the value is unchanged, only its home is.
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: discord-webhook-url
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-password
+            - name: GF_SERVER_DOMAIN
+              value: "grafana.upayan.dev"
+            - name: GF_SERVER_ROOT_URL
+              value: "https://grafana.upayan.dev/"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_AUTH_BASIC_ENABLED
+              value: "true"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            # SEC-007 / decision D-11 (owner, 2026-09-28): the public-dashboards feature is off.
+            # Three public dashboards were live with no authentication at all — the URL *is* the
+            # credential — and two of them streamed vcap-dev/vcap-staging pod logs, where a
+            # vcap-staging dataset is class A student data. A third still served the retired
+            # hello-kitty dashboard. Grafana does not revoke the access tokens when the feature is
+            # switched off, so the old URLs stop resolving rather than staying valid; the VCAP
+            # developers read logs through the authenticated viewer accounts below
+            # (`grafana-create-dev-user`) once NET-004 and VCAP-010 land.
+            - name: GF_PUBLIC_DASHBOARDS_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+            - name: grafana-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: grafana-dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: grafana-dashboards
+              mountPath: /etc/grafana/dashboards
+              readOnly: true
+            - name: grafana-alerting-provisioning
+              mountPath: /etc/grafana/provisioning/alerting
+              readOnly: true
+          securityContext:
+            runAsUser: 472
+            runAsGroup: 472
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: grafana-admin-secret
+          secret:
+            secretName: grafana-admin-credentials
+            items:
+              - key: admin-password
+                path: admin-password
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
+        - name: grafana-dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: grafana-dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: grafana-alerting-provisioning
+          projected:
+            sources:
+              - secret:
+                  name: grafana-alerting-contactpoints
+              - configMap:
+                  name: grafana-alerting-config

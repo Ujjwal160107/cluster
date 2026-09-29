@@ -1,0 +1,12 @@
+[Unit]
+Description=vps-backup monthly restore drill
+After=k3s.service
+Wants=k3s.service
+
+[Service]
+Type=oneshot
+# The drill needs kubectl (to reach a postgres pod for pg_restore validation), which is why this is
+# a host unit with the k3s kubeconfig already in place.
+Environment=HOME=/root
+EnvironmentFile=-{{ backup_env_file }}
+ExecStart={{ backup_restore_test_script_path }}

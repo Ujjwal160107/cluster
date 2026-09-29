@@ -1,0 +1,26 @@
+# S11: cas-api scales via the KEDA HTTP add-on -- public traffic reaches it
+# via the interceptor proxy in the `keda` namespace
+# (k8s/platform/keda-add-ons-http-routes/ingress.yaml), never directly from
+# Traefik. Only that interceptor may reach this pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cas-api
+  namespace: cas-api
+spec:
+  podSelector:
+    matchLabels:
+      app: cas-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: interceptor
+      ports:
+        - protocol: TCP
+          port: 4000

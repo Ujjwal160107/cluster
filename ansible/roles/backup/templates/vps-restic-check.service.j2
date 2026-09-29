@@ -1,0 +1,9 @@
+[Unit]
+Description=vps-backup repository integrity check (restic check)
+After=k3s.service
+
+[Service]
+Type=oneshot
+Environment=HOME=/root
+EnvironmentFile=-{{ backup_env_file }}
+ExecStart={{ backup_check_script_path }}

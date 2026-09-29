@@ -1,0 +1,9 @@
+[Unit]
+Description=k3s etcd snapshot (12h)
+After=k3s.service
+Wants=k3s.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-{{ backup_env_file }}
+ExecStart={{ backup_etcd_snapshot_script_path }}

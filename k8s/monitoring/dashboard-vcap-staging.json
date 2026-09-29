@@ -1,0 +1,40 @@
+{
+  "title": "VCAP Staging Logs",
+  "uid": "vcap-staging-logs",
+  "description": "Live logs for vcap-staging pods",
+  "tags": ["vcap", "staging", "logs"],
+  "schemaVersion": 38,
+  "editable": false,
+  "graphTooltip": 0,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "id": null,
+  "panels": [
+    {
+      "type": "logs",
+      "title": "Staging API Logs",
+      "id": 1,
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 24 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "editorMode": "code",
+          "expr": "{filename=~\"/var/log/containers/.+_vcap-staging_.+\"}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

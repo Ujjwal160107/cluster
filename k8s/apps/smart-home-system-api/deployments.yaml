@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smart-home-system-api
+  labels:
+    app: smart-home-system-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: smart-home-system-api
+  template:
+    metadata:
+      labels:
+        app: smart-home-system-api
+    spec:
+      priorityClassName: low-priority
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      containers:
+        - name: smart-home-system-api
+          image: ghcr.io/upayanmazumder/smart-home-system/api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          envFrom:
+            - secretRef:
+                name: smart-home-system-api-env
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: smart-home-system-volume
+              mountPath: /api/data/users
+      volumes:
+        - name: smart-home-system-volume
+          persistentVolumeClaim:
+            claimName: smart-home-system-pvc

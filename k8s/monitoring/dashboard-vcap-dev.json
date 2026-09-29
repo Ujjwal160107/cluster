@@ -1,0 +1,40 @@
+{
+  "title": "VCAP Dev Logs",
+  "uid": "vcap-dev-logs",
+  "description": "Live logs for vcap-dev pods",
+  "tags": ["vcap", "dev", "logs"],
+  "schemaVersion": 38,
+  "editable": false,
+  "graphTooltip": 0,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "id": null,
+  "panels": [
+    {
+      "type": "logs",
+      "title": "Dev API Logs",
+      "id": 1,
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 24 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "editorMode": "code",
+          "expr": "{filename=~\"/var/log/containers/.+_vcap-dev_.+\"}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

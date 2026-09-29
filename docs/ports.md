@@ -1,0 +1,96 @@
+# Port registry
+
+Human-readable render of [`../inventory/ports.yaml`](../inventory/ports.yaml), the machine-readable
+source of truth. Regenerate this table by hand whenever the YAML changes (no generator script yet
+— keep them in sync manually, `scripts/check-ports.py` validates the YAML's internal consistency
+and cross-checks it against `k8s/` manifests, not this file's prose).
+
+Before adding a new port: read [`runbooks/add-port.md`](runbooks/add-port.md).
+
+`status`: **live** = reachable today · **target** = planned, not yet implemented · **remove** =
+reachable today, scheduled for removal · **closed** = was reachable, now serves nothing · **not-open**
+= target state, deliberately not yet listening. §4 of the architecture review (kept private, not
+published) holds the full current-state audit this table is derived from (verified 2026-09-27 via `ss
+-Hltnp`/`ss -Hlunp` on the node + an external TCP probe).
+
+## Current state (today)
+
+| Port | Proto | Service | Scope | Status | Notes |
+|---|---|---|---|---|---|
+| 22 | tcp | sshd | public | remove | key-only root; moves to tailnet-only |
+| 80 | tcp | traefik (web) | public | live | Cloudflare-proxied, all `*.upayan.dev` hosts |
+| 443 | tcp | traefik (websecure) | public | live | Cloudflare-proxied, all `*.upayan.dev` hosts |
+| 5432 | tcp | vcap-dev postgres (legacy path) | public | closed | **closed, never reopens** — the unmanaged NodePort duplicate was deleted 2026-09-29 and the tenant chart's same-namespace NetworkPolicy blocks the Traefik path, so nothing answers. Superseded by 15432 |
+| 5433 | tcp | vcap-staging postgres (legacy path) | public | closed | same as 5432; superseded by 15433 |
+| 15432 | tcp | vcap-dev postgres (target path) | public | not-open | **NOT OPEN YET** — OD-1's target port. Nothing listens and no firewall rule exists; opens only once TLS, per-person non-superuser roles, a network-superuser-locking `pg_hba`, the additive ingress NetworkPolicy and auth-failure alerting all exist |
+| 15433 | tcp | vcap-staging postgres (target path) | public | not-open | same contract as 15432, and gated on the tenant accepting the chart-side change (OD-16); never opens before 15432 has been exercised |
+| 30532 | tcp | vcap-staging postgres (dup NodePort) | public | removed | unmanaged, `kubectl apply`-created; deleted 2026-09-29 |
+| 30533 | tcp | vcap-dev postgres (dup NodePort) | public | removed | unmanaged, `kubectl apply`-created; deleted 2026-09-29 |
+| 30843 | tcp | traefik LB NodePort (web) | public | remove | kube-proxy auto-allocated, duplicates 80 |
+| 30851 | tcp | traefik LB NodePort (websecure) | public | remove | kube-proxy auto-allocated, duplicates 443 |
+| 32301 | tcp | traefik LB NodePort (postgres-dev) | public | removed | kube-proxy auto-allocated; deleted 2026-09-29 |
+| 32131 | tcp | traefik LB NodePort (postgres-staging) | public | removed | kube-proxy auto-allocated; deleted 2026-09-29 |
+| 6443 | tcp | k3s apiserver | public | remove | hostNetwork; tailnet-only after the network hardening |
+| 10250 | tcp | kubelet | public | remove | hostNetwork; tailnet-only after the network hardening |
+| 2379 | tcp | etcd (client) | public | remove | 2-node cluster-init leftover; closes with the network hardening |
+| 2380 | tcp | etcd (peer) | public | remove | same as 2379 |
+| 9100 | tcp | node-exporter | public | remove | hostNetwork, no auth, leaks host metrics; fixed by binding `127.0.0.1`, then closed by the firewall |
+| 41641 | udp | tailscaled | public | live | required open for WireGuard NAT traversal |
+| 8472 | udp | flannel VXLAN | public | remove | pod overlay, single node, closes with the network hardening |
+
+Loopback-only ports (10248–10259, 6444, 2381–2382, 10010, 53) are not internet-reachable and are
+omitted from this table — see the full audit in the architecture review §4 if needed.
+
+**What the current-state table does not say: 80 and 443 accept traffic from *any* source, not only
+Cloudflare.** Measured 2026-09-28 — `curl -sk --resolve argocd.upayan.dev:443:138.201.157.147
+https://argocd.upayan.dev` returns `200`, and grafana `302`, straight from the origin; TCP 80, 443, 6443
+and 22 all connect from an ordinary host. "Cloudflare-proxied" describes how legitimate traffic arrives,
+not a restriction on who may arrive. The "from Cloudflare IP ranges only" row in the target table is
+NET-003's work, and until it lands, Cloudflare Access would be bypassable by anyone who knows the origin
+address — worth knowing before NET-003 is treated as defence in depth rather than as the only control.
+
+## Target state (OD-1, not yet implemented)
+
+| Port | Proto | Service | Scope | Notes |
+|---|---|---|---|---|
+| 80 | tcp | traefik (web) | public | from Cloudflare IP ranges only (Hetzner firewall) |
+| 443 | tcp | traefik (websecure) | public | from Cloudflare IP ranges only |
+| 15432 | tcp | vcap-dev postgres | public (**not open yet**) | the target public path — TLS termination at Traefik, per-person non-superuser roles, real client IP visible to `pg_hba`. 5432 is closed and does not come back |
+| 15433 | tcp | vcap-staging postgres | public (**not open yet**) | same hardening, holds real (class A) student data; opens only after 15432 |
+| 41641 | udp | tailscaled | public | unchanged |
+| 22 | tcp | sshd | tailnet | no public rule; admin plane is tailnet-only |
+| 6443 | tcp | k3s apiserver | tailnet | no public rule |
+| 10250 | tcp | kubelet | tailnet | no public rule |
+
+Everything else in the "current state" table above is closed by the Hetzner Cloud Firewall once the
+network hardening lands. Note the asymmetry the two tables deliberately keep: **5432/5433 are closed
+today and are not the target** — the target public path is 15432/15433, and neither is open yet (the
+controls do not exist). See [`networking.md`](networking.md) for the firewall-layer design; §7 of the
+architecture review (kept private, not published) holds the full target-architecture diagram.
+
+## Measured external exposure (2026-09-28 — before 5432/5433 were closed)
+
+Probed from the operator workstation against `138.201.157.147`, i.e. from the public internet. This
+is a dated snapshot: since 2026-09-29 the Postgres path is closed (see the current-state table), so
+5432/5433 no longer answer.
+
+| Port | Service | Result |
+|---|---|---|
+| 22 | sshd (root login) | **OPEN** |
+| 5432 | vcap-**dev** Postgres | was **OPEN** — **now closed** (NodePort deleted, tenant NetworkPolicy blocks the Traefik path) |
+| 5433 | vcap-**staging** Postgres (holds student PII) | was **OPEN** — **now closed**, same |
+| 15432 / 15433 | vcap Postgres (target path) | **closed** — nothing listens, no firewall rule (correct until the controls exist) |
+| 30532 / 30533 / 30843 / 32301 | NodePort duplicates | filtered (firewalled, despite binding); all four deleted 2026-09-29 |
+| 80 / 443 | Traefik | OPEN, expected (Cloudflare-proxied) |
+| 6443 | k3s API server | **reachable** — `HTTP 401` on `/healthz`, so it answers unauthenticated probes |
+| 2379 / 2380 | etcd client / peer | filtered (correctly firewalled off) |
+| 10250 | kubelet | filtered (correctly firewalled off) |
+
+So the firewall is doing more than the host's listener table suggests: etcd and kubelet bind the
+public address but are unreachable from outside.
+
+**The live exposure is 22, 80, 443 and 6443.** The database ports are no longer part of it: 5432/5433
+were Traefik TCP passthrough over unmanaged `IngressRouteTCP` objects, and they serve nothing now. The
+public path moves to **15432/15433**, and it stays shut until TLS, per-person non-superuser roles, a
+network-superuser-locking `pg_hba`, the additive ingress policy and auth-failure alerting all exist —
+none of them do today.

@@ -1,0 +1,37 @@
+# S11 hardening: default-deny ingress, then allow only Traefik (public
+# traffic for ks.upayan.dev; api.ks.upayan.dev is unreachable at the
+# Cloudflare edge today -- see changelog/2026-09.md) and
+# pods in this namespace. Web (3000) and api (5000) share one pod here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kodesphere-default-deny-ingress
+  namespace: kodesphere
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kodesphere-ingress
+  namespace: kodesphere
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 5000

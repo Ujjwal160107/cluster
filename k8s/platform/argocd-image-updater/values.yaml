@@ -1,0 +1,36 @@
+# ArgoCD Image Updater Helm chart values.
+# Requires:
+#   - Secret `argocd/git-creds`   (PAT with repo write access, for git write-back)
+#
+# Registry credentials: deliberately NONE. A `credentials: pullsecret:argocd/ghcr-creds`
+# line was removed 2026-09-28 because that PAT is dead (GitHub returns 401 on
+# `GET /user`, 403 on `ghcr.io/token`, both re-verified), and a *rejected* credential
+# is worse than no credential — it is sent on every request, so even publicly
+# pullable packages fail with `denied: denied`. Without it, anonymous pulls work:
+# 18 of the 23 configured images are public. The 5 private ones
+# (`upayanmazumder/bitvault/bitvaultd`, `vitscopesoftwareteam/vcap-staging-backend/{api,auth,worker}`,
+# `vitscopesoftwareteam/vcap-staging-frontend/web`) cannot be tracked until an owner
+# supplies a PAT with `read:packages` (or per-package access) — they are unaffected
+# functionally, being digest-pinned and pulled via their own `pull-secret`s.
+config:
+  registries:
+    - name: ghcr
+      prefix: ghcr.io
+      api_url: https://ghcr.io
+      # Credential restored 2026-09-28: the owner refreshed the CLI token with `write:packages`
+      # (read implied), and `argocd/ghcr-creds` now holds it, so the five private packages are
+      # trackable again. Guarded by `pod-image-pull-failing` — and the class of failure this whole
+      # episode belonged to is now backed up and alerted on either way (see docs/backups.md).
+      credentials: pullsecret:argocd/ghcr-creds
+      default: true
+  logLevel: info
+  disableKubeEvents: false
+  gitCommitUser: argocd-image-updater
+  gitCommitMail: image-updater@upayan.dev
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 150m
+    memory: 128Mi

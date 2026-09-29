@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mochi
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    # Track the mutable 'latest' tag by digest, same pattern as meghmitra
+    # (k8s/argocd/applications/de/meghmitra.yaml). No write-back-method
+    # annotation -> defaults to "argocd" (in-cluster kustomize image-override
+    # patch on this Application object), not git -- ghcr.io/upayanmazumder/mochi
+    # is this owner's own package, but keeping the same zero-git-write default
+    # as meghmitra avoids needing a GitHub write credential for routine
+    # image bumps. This replaces keel (keel.sh/policy: force, trigger: poll)
+    # which previously drove the unmanaged default/mochi Deployment.
+    argocd-image-updater.argoproj.io/image-list: "app=ghcr.io/upayanmazumder/mochi:latest"
+    argocd-image-updater.argoproj.io/app.update-strategy: digest
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/upayanmazumder/vps
+    targetRevision: main
+    path: k8s/apps/mochi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mochi
+  syncPolicy:
+    # Cutover complete (see changelog/2026-09.md): default/mochi retired, mochi/mochi
+    # confirmed live (logged into Discord, webhook posts succeeding) before this was
+    # enabled. This block was applied live first via `kubectl patch app mochi`, then
+    # committed here so git matches reality and self-heal stays in charge going forward.
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -1,0 +1,72 @@
+---
+# Mounts the S8 `vps-data` Hetzner volume at /srv/data. This role NEVER runs mkfs — Hetzner
+# formats a brand-new volume automatically at creation time (`format = "ext4"` in
+# `terraform/storage.tf`, which is in the `cluster` repository — see `terraform/README.md` in this
+# one); if this device were ever unformatted, that's a sign something is wrong
+# (wrong device, or a genuinely new/replacement volume) and this role must fail loudly, not "fix"
+# it by formatting over whatever is there.
+
+- name: Assert the expected device exists
+  ansible.builtin.stat:
+    path: "{{ data_volume_device }}"
+  register: data_volume_device_stat
+
+- name: Fail if the device is missing
+  ansible.builtin.assert:
+    that:
+      - data_volume_device_stat.stat.exists
+    fail_msg: >-
+      {{ data_volume_device }} does not exist. This role only mounts an existing, already-attached,
+      already-formatted volume (see `terraform/storage.tf` in the `cluster` repository) — it never creates or formats one.
+      Check `lsblk` and the Hetzner volume attachment before re-running.
+
+- name: Verify the device is already formatted ext4 (refuse to mkfs)
+  ansible.builtin.command: "blkid -o value -s TYPE {{ data_volume_device }}"
+  register: data_volume_fstype
+  changed_when: false
+  check_mode: false
+
+- name: Fail if the device isn't ext4 (never format it here)
+  ansible.builtin.assert:
+    that:
+      - data_volume_fstype.stdout == "ext4"
+    fail_msg: >-
+      {{ data_volume_device }} is not ext4 (found: '{{ data_volume_fstype.stdout }}'). This role
+      refuses to run mkfs under any circumstance — if this volume is genuinely unformatted, format
+      it manually with full awareness of what's on it, then re-run this role.
+
+- name: Ensure the mount point exists
+  ansible.builtin.file:
+    path: "{{ data_volume_mount_path }}"
+    state: directory
+    mode: "0755"
+
+- name: Get the device's UUID (fstab should reference UUID, not the /dev path, for stability)
+  ansible.builtin.command: "blkid -o value -s UUID {{ data_volume_device }}"
+  register: data_volume_uuid
+  changed_when: false
+  check_mode: false
+
+- name: Add the fstab entry (nofail — a missing/detached volume must never block boot)
+  ansible.posix.mount:
+    path: "{{ data_volume_mount_path }}"
+    src: "UUID={{ data_volume_uuid.stdout }}"
+    fstype: ext4
+    opts: "defaults,nofail,x-systemd.device-timeout=30"
+    state: mounted
+
+# P3-M2. These directories back `hostPath` PVs, so their existence and ownership are host state:
+# a hostPath volume inherits the host's ownership, and `type: Directory` will not mount a path that
+# is absent. Declaring them here is what makes a fresh host able to bind the same claims — the
+# static PVs alone are not enough, which is exactly the gap a rebuild would otherwise discover with
+# a Pending pod. See `defaults/main.yml` for why VCAP's directories are not in this list.
+- name: Ensure the tenant data directories exist with the ownership their workloads run as
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ data_volume_tenant_dirs }}"
+  loop_control:
+    label: "{{ item.path }}"

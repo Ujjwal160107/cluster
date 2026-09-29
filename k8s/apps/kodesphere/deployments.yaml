@@ -1,0 +1,64 @@
+# Cutover 2026-09-28: this is now the canonical, always-on public kodesphere
+# instance (Service + Ingress added, cron scale-to-zero removed). Live
+# verification during the architecture review showed the previously-assumed
+# "duplicate" (`default/kodesphere`, unmanaged) was actually the *only* copy
+# serving ks.upayan.dev/api.ks.upayan.dev -- this Deployment's spec/secrets
+# were already correct and matched the live working config exactly (byte-for-
+# byte secret diff performed before cutover), it just needed the network path.
+# See changelog/2026-09.md (the archived/kodesphere-default-dup/ export it used to cite was deleted
+# 2026-09-29, CLEAN-001; git history holds it).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kodesphere
+  labels:
+    app: kodesphere
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kodesphere
+  template:
+    metadata:
+      labels:
+        app: kodesphere
+    spec:
+      priorityClassName: low-priority
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - vps
+      containers:
+        - name: kodesphere
+          image: ghcr.io/upayanmazumder/kodesphere:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+            - containerPort: 5000
+          envFrom:
+            - secretRef:
+                name: kodesphere-env
+          env:
+            - name: GITHUB_PRIVATE_KEY_PATH
+              value: /etc/kodesphere/private-key.pem
+          volumeMounts:
+            - name: github-private-key-volume
+              mountPath: /etc/kodesphere
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: github-private-key-volume
+          secret:
+            secretName: github-private-key

@@ -1,0 +1,42 @@
+# yamllint config — CI-007 (partial), adopted 2026-09-28.
+#
+# Deliberately narrow, and that is the whole design. The purpose is to catch YAML that is **wrong** —
+# duplicate keys silently overriding each other, malformed structure, no final newline — not to
+# reformat 150 manifest files that work. yamllint's defaults flag **968** lines in `k8s/` here and
+# almost all of them are style (`line-length`, `document-start`, `comments-indentation`); a lint step
+# that produces 968 complaints is one that gets disabled on the first busy day, taking the checks that
+# matter with it.
+#
+# So: keep the rules that find mistakes, disable the ones that express a style this repo has
+# deliberately chosen otherwise.
+extends: default
+
+ignore: |
+  # Generated, not authored: `k8s/hetzner-csi/render.sh` regenerates this file from the upstream chart
+  # (`helm template`), so its trailing spaces would come back the next time it is re-rendered. Fixing
+  # the generator's output is the generator's business, not a hand-edit here.
+  k8s/hetzner-csi/rendered-manifests.yaml
+  # Kubernetes' own kube-root-ca ConfigMaps and any vendored CRD bundle follow upstream formatting.
+  **/crds/**
+
+rules:
+  # --- kept: these find real mistakes ------------------------------------------------------------
+  key-duplicates: enable # a duplicate mapping key silently wins the last one — a real manifest bug
+  new-line-at-end-of-file: enable
+  trailing-spaces: enable
+  # Syntax errors cannot be disabled, and are the reason yamllint runs at all.
+
+  # --- disabled on purpose -----------------------------------------------------------------------
+  line-length: disable # image digests, chart URLs, and long explanatory comments are all legitimate
+  document-start: disable # most files here are single-document; '---' is optional in YAML
+  comments: disable
+  comments-indentation: disable # comments explain the line above or below; both appear here
+  truthy: disable # `on`/`off`/`yes`/`no` are used deliberately in a few places
+  indentation: disable # sequences are indented both ways across the tree, consistently within files
+  braces: disable
+  brackets: disable
+  colons: disable
+  commas: disable
+  hyphens: disable
+  octal-values: disable
+  empty-lines: disable

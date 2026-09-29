@@ -1,0 +1,22 @@
+# Cluster-owned documentation of the live object: the public Postgres edge for
+# vcap-staging. See `edge/dev/ingressroutetcp.yaml` for the full reasoning.
+#
+# vcap-staging carries class A student data, so the port and TLS changes
+# (P7-N7) are additionally gated on the VCAP team's acceptance of the server-side
+# pg_hba and non-superuser changes (P2-08/OD-16). Until then this route serves
+# nothing: the tenant's own NetworkPolicy admits same-namespace traffic only.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: vcap-postgres-staging
+  namespace: vcap-staging
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  entryPoints:
+    - postgres-staging
+  routes:
+    - match: HostSNI("*")
+      services:
+        - name: vcap-backend-staging-postgres
+          port: 5432

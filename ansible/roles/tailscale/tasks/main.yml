@@ -1,0 +1,91 @@
+---
+# Tailscale is already installed and `up` on this node (100.96.250.81) — this role is idempotent
+# and must NOT re-authenticate or otherwise disturb the existing node identity.
+#
+# ANS-002 (2026-09-28) changed "never runs `up`" into "runs `up` only when it is actually needed":
+# a fresh node (DR/migration, DR-006) previously had no way to join the tailnet from Ansible at all,
+# which left the rebuild path depending on a manual step. The guard that matters is unchanged — the
+# task below cannot fire on a node that is already running, so the live admin path is not at risk.
+#
+# CORRECTION, measured 2026-09-28: this file used to claim the node's key expiry was disabled. It is
+# **not** — `tailscale status --json` reports the key expiring **2027-01-08**. Tailscale auto-renews a
+# user-owned device while it stays online, and this node is online continuously, so this is not an
+# emergency; it does mean a long-enough outage past that date would take the admin plane with it, which
+# is what docs/runbooks/lost-tailnet-access.md and the Hetzner console exist for. If the node is ever
+# tagged (`tag:vps`, as the architecture review's ACL design assumes), expiry is disabled by default —
+# it is not tagged today.
+
+- name: Check whether tailscale is already installed
+  ansible.builtin.command: tailscale version
+  register: tailscale_version_check
+  changed_when: false
+  failed_when: false
+  check_mode: false # read-only, safe to run for real even under --check
+
+- name: Install tailscale (only if missing)
+  when: tailscale_version_check.rc != 0
+  block:
+    - name: Add the Tailscale apt key and repo
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+        curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list
+      args:
+        creates: /etc/apt/sources.list.d/tailscale.list
+
+    - name: Install the tailscale package
+      ansible.builtin.apt:
+        name: tailscale
+        state: present
+        update_cache: true
+
+- name: Check current tailscale connection state
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+  check_mode: false # read-only, safe to run for real even under --check
+
+# ANS-002: join the tailnet — but only on a node that is not already running, and only when an auth
+# key is available. On the live node both conditions fail, so this is a no-op there by construction:
+# re-running `up` with different flags on the cluster's admin path is the one mistake that can cut off
+# your own access.
+#
+# The key comes from `tailscale_auth_key` in `group_vars/vps/secrets.sops.yaml` (SOPS-encrypted, like
+# every other credential — ADR 0002). Deliberately NOT via Terraform cloud-init, which is the other
+# option the plan mentions: an auth key in `user_data` ends up in Terraform state and in the server's
+# metadata. The owner mints it in the Tailscale admin console (Settings → Keys), where expiry and any
+# pre-authorised tag are set.
+- name: Join the tailnet (fresh node only, and only with an auth key)
+  when:
+    - tailscale_status.rc == 0
+    - (tailscale_status.stdout | from_json).BackendState != 'Running'
+    - tailscale_auth_key | default('') | length > 0
+  ansible.builtin.command:
+    cmd: "tailscale up --authkey={{ tailscale_auth_key }}"
+  no_log: true # the key would otherwise appear in the task output and the run log
+  changed_when: true # joining a logged-out node is a change by definition, and the `when` above gates it
+  register: tailscale_up
+
+- name: Wait for the tailnet to report Running
+  when: tailscale_up is defined and tailscale_up.changed | default(false)
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_after
+  changed_when: false
+  check_mode: false # read-only probe; must run for real even under --check
+  until: (tailscale_after.stdout | from_json).BackendState == 'Running'
+  retries: 12
+  delay: 5
+
+- name: Report the tailnet address after joining
+  ansible.builtin.debug:
+    msg: "joined the tailnet: {{ (tailscale_after.stdout | from_json).TailscaleIPs | join(', ') }}"
+  when: tailscale_after is defined and tailscale_after.stdout is defined
+
+- name: Report current tailscale state (informational only)
+  ansible.builtin.debug:
+    msg: >-
+      tailscale is installed and {{ 'already running — no action taken on this run'
+      if (tailscale_status.rc == 0 and (tailscale_status.stdout | from_json).BackendState == 'Running')
+      else 'not running' }}
+  when: tailscale_status.rc == 0

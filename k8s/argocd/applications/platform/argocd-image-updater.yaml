@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: argocd-image-updater
+  namespace: argocd
+spec:
+  project: platform
+  sources:
+    - repoURL: https://argoproj.github.io/argo-helm
+      chart: argocd-image-updater
+      targetRevision: "0.14.0" # pinned: was floating "0.*"; this is the version already running live (2026-09-28)
+      helm:
+        valueFiles:
+          - $values/k8s/platform/argocd-image-updater/values.yaml
+    - repoURL: https://github.com/upayanmazumder/vps
+      targetRevision: main
+      ref: values
+    # CLUSTER-004: the credential this app's own values.yaml points at, adopted into git as SOPS — it
+    # existed only in the cluster, so a rebuild from git would have produced an image-updater that could
+    # not authenticate and simply stopped tracking digests. A separate source rather than reusing the
+    # `values` ref above, which is consumed as a file reference and renders no objects.
+    - repoURL: https://github.com/upayanmazumder/vps
+      targetRevision: main
+      path: k8s/platform/argocd-image-updater
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

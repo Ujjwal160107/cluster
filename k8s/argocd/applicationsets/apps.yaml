@@ -1,0 +1,134 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: apps
+  namespace: argocd
+spec:
+  goTemplate: true
+
+  # P3-02. Deleting this ApplicationSet must not delete the Applications it generated — and therefore
+  # not the workloads behind them. Without this, removing one manifest (or losing it in a bad merge)
+  # cascades: the set goes, its Applications go, and with them the Deployments, Services, PVCs and
+  # Ingress of ten apps. GitOps deletion should be a deliberate act, not a side effect of an edit;
+  # this is the same protection as the `Prune=false,Delete=false` annotation on the Applications
+  # themselves, one level up.
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  # Consolidated replacement for `apps-de` + `apps-sg` (2026-09-28): one set,
+  # one project (`apps`), one flat folder tree (`k8s/apps/<app>/`), and
+  # unprefixed Application names. The de/sg split existed only because the two
+  # names were meant to be different nodes; with one node it was pure overhead.
+  #
+  # A LIST generator, not a git directory generator, so each Application can
+  # carry its own argocd-image-updater image-list annotation. A directory
+  # generator exposes only `path`, and a folder name cannot be turned into an
+  # image name for most of these apps (`dj-html-nodejs-web` ->
+  # devjourney/html-nodejs/web; `upayan-web` -> upayan.dev), which is why the
+  # per-app `.argocd/image-updater.yaml` files never actually drove anything --
+  # they were documentation only, and have been removed now that the data lives
+  # here. See the changelog for how the per-app files were removed (2026-09-28) and the
+  # `k8s/docs/` tree deleted (CLEAN-001, 2026-09-29).
+  #
+  # CONSEQUENCE, and it is a real one: apps are no longer auto-discovered.
+  # Adding an app means adding an element below AND adding its namespace to
+  # k8s/argocd/projects/apps.yaml -- see
+  # .claude/skills/app-onboarding/SKILL.md. Omitting an existing app here makes
+  # the set stop managing it (and once it is gone from git, the Application is
+  # pruned).
+  #
+  # Apps NOT here, each with an explicit Application of its own in
+  # k8s/argocd/applications/apps/ because the template above is deliberately
+  # single-image (a `{{- if }}` line is not valid YAML inside this manifest):
+  #   status-page (api + app images), meghmitra (api + web), upayan-v5 (app +
+  #   api), mochi, and rankstack (Helm chart, multi-source).
+  # The vcap apps live in the `vcap` project (external repos) --
+  # k8s/argocd/applications/vcap/.
+  #
+  # write-back-method is `git`, not the "argocd" default: the in-cluster
+  # kustomize image-override that the default writes onto the Application object
+  # would be reconciled away by this set on its next pass, so digest bumps have
+  # to land in the repo (same choice as vcap-frontend-staging).
+  generators:
+    - list:
+        elements:
+          - name: bandit
+            imageList: "app=ghcr.io/upayanmazumder/bandit:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/bandit
+          - name: bitvault
+            imageList: "app=ghcr.io/upayanmazumder/bitvault/bitvaultd:edge"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/bitvault/bitvaultd
+          - name: cas-api
+            imageList: "api=ghcr.io/upayanmazumder/cas-api:latest"
+            alias0: api
+            kustomize0: ghcr.io/upayanmazumder/cas-api
+          - name: dj-html-nodejs-web
+            imageList: "app=ghcr.io/upayanmazumder/devjourney/html-nodejs/web:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/devjourney/html-nodejs/web
+          - name: kodesphere
+            imageList: "app=ghcr.io/upayanmazumder/kodesphere:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/kodesphere
+          - name: learning-docker
+            imageList: "app=ghcr.io/upayanmazumder/learning-docker:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/learning-docker
+          - name: learning-qwik
+            imageList: "app=ghcr.io/upayanmazumder/devjourney/learning-qwik:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/devjourney/learning-qwik
+          - name: learning-react
+            imageList: "app=ghcr.io/upayanmazumder/devjourney/learning-react:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/devjourney/learning-react
+          - name: smart-home-system-api
+            imageList: "api=ghcr.io/upayanmazumder/smart-home-system/api:latest"
+            alias0: api
+            kustomize0: ghcr.io/upayanmazumder/smart-home-system/api
+          - name: upayan-web
+            imageList: "app=ghcr.io/upayanmazumder/upayan.dev:latest"
+            alias0: app
+            kustomize0: ghcr.io/upayanmazumder/upayan.dev
+  template:
+    metadata:
+      name: '{{.name}}'
+      annotations:
+        # P3-02: reaches every Application this set generates (the set's own `metadata.annotations`
+        # does not). Without it on the template, the ten generated Applications stayed unannotated —
+        # measured after the first sync, which is why this line exists rather than being assumed.
+        argocd.argoproj.io/sync-options: Delete=false,Prune=false
+        argocd-image-updater.argoproj.io/image-list: '{{.imageList}}'
+        argocd-image-updater.argoproj.io/{{.alias0}}.update-strategy: digest
+        argocd-image-updater.argoproj.io/{{.alias0}}.kustomize.image-name: '{{.kustomize0}}'
+        argocd-image-updater.argoproj.io/write-back-method: "git:secret:argocd/git-creds"
+        argocd-image-updater.argoproj.io/git-branch: main
+        argocd-image-updater.argoproj.io/git-repository: https://github.com/upayanmazumder/vps
+    spec:
+      project: apps
+      source:
+        repoURL: https://github.com/upayanmazumder/vps
+        targetRevision: main
+        path: k8s/apps/{{.name}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.name}}'
+      ignoreDifferences:
+        # cas-api, dj-html-nodejs-web, learning-docker, learning-qwik,
+        # smart-home-system-api scale 0<->1 via the KEDA HTTP add-on;
+        # kodesphere scales via KEDA cron. Don't flag KEDA-owned replica
+        # counts as drift.
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

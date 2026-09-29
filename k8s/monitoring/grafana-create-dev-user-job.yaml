@@ -1,0 +1,161 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grafana-create-dev-user
+  namespace: monitoring
+  annotations:
+    # Runs on every ArgoCD sync; all operations are idempotent.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  # §13: 10 retries against a wrong password hung the sync behind a PostSync hook.
+  backoffLimit: 2
+  # Hard cap: a PostSync hook that cannot finish freezes every later sync of this
+  # Application (observed 2026-09-28, operation Running for hours). 600 s is far more
+  # than the work needs, and a timeout fails the hook instead of stalling the sync.
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: provision
+          # pinned by digest: a floating tag in a Job that runs on every sync is exactly the
+          # class of change that arrives unreviewed
+          image: docker.io/library/alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              apk add --no-cache curl jq > /dev/null
+
+              BASE="http://grafana.monitoring.svc.cluster.local"
+              AUTH="-u ${ADMIN_USER}:${ADMIN_PASSWORD}"
+
+              echo "Waiting for Grafana..."
+              until curl -sf "${BASE}/api/health" > /dev/null; do sleep 5; done
+              echo "Grafana ready."
+
+              lookup() {
+                curl -s $AUTH "${BASE}/api/users/lookup?loginOrEmail=$1"
+              }
+
+              create() {
+                name="$1"; email="$2"; login="$3"; password="$4"
+                curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE}/api/admin/users" \
+                  -H "Content-Type: application/json" $AUTH \
+                  -d "{\"name\":\"${name}\",\"email\":\"${email}\",\"login\":\"${login}\",\"password\":\"${password}\",\"OrgId\":1,\"role\":\"Viewer\"}"
+              }
+
+              # The Secret is authoritative: an existing login is never assumed to hold the
+              # current password, and an account that holds the address under a different
+              # login is corrected rather than duplicated. Grafana answers 412 to a POST
+              # whose *email* already exists (not only whose login does), which is why the
+              # address — not the login — is the identifier used to resolve it.
+              upsert_user() {
+                name="$1"; email="$2"; login="$3"; password="$4"
+                status=$(create "$name" "$email" "$login" "$password")
+                case "$status" in
+                  200) echo "${login}: created (HTTP 200)."; return 0 ;;
+                  412) : ;;   # the address, the login, or both are already taken
+                  *)   echo "${login}: create failed (HTTP ${status})"; exit 1 ;;
+                esac
+
+                id=$(lookup "$email" | jq -r '.id // empty')
+                cur_login=$(lookup "$email" | jq -r '.login // empty')
+                if [ -z "$id" ]; then
+                  id=$(lookup "$login" | jq -r '.id // empty')
+                  cur_login=$(lookup "$login" | jq -r '.login // empty')
+                fi
+                [ -n "$id" ] || { echo "${login}: exists but neither the address nor the login resolves to a user"; exit 1; }
+
+                if [ "$cur_login" != "$login" ]; then
+                  echo "${login}: account id=${id} holds the address under login '${cur_login}' — renaming"
+                  st=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${BASE}/api/users/${id}" \
+                    -H "Content-Type: application/json" $AUTH \
+                    -d "{\"name\":\"${name}\",\"email\":\"${email}\",\"login\":\"${login}\"}")
+                  if [ "$st" != "200" ]; then
+                    # Rename refused (login taken, or the API declined). Deleting and
+                    # recreating is the fallback that still ends with exactly one account,
+                    # under the intended login, holding the new password.
+                    echo "${login}: rename refused (HTTP ${st}) — deleting id=${id} and recreating"
+                    st=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "${BASE}/api/admin/users/${id}" $AUTH)
+                    [ "$st" = "200" ] || { echo "${login}: delete failed (HTTP ${st})"; exit 1; }
+                    st=$(create "$name" "$email" "$login" "$password")
+                    [ "$st" = "200" ] || { echo "${login}: recreate failed (HTTP ${st})"; exit 1; }
+                    echo "${login}: recreated (HTTP 200)."
+                    return 0
+                  fi
+                fi
+
+                st=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${BASE}/api/admin/users/${id}/password" \
+                  -H "Content-Type: application/json" $AUTH -d "{\"password\":\"${password}\"}")
+                [ "$st" = "200" ] || { echo "${login}: password update failed (HTTP ${st})"; exit 1; }
+                echo "${login}: exists, password set (HTTP 200)."
+              }
+
+              # Belt and braces: any *other* account holding one of the two addresses is an
+              # orphan that could still authenticate with a historical password. It is
+              # removed, so exactly one Viewer exists per address.
+              prune_stale() {
+                email="$1"; keep_id="$2"
+                ids=$(curl -sf $AUTH "${BASE}/api/users/search?perpage=1000&query=" \
+                  | jq -r --arg e "$email" --arg k "$keep_id" \
+                      '.users[] | select(.email==$e) | select((.id|tostring)!=$k) | .id')
+                for sid in $ids; do
+                  [ -n "$sid" ] || continue
+                  st=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "${BASE}/api/admin/users/${sid}" $AUTH)
+                  echo "removed stale account id=${sid} holding ${email} (HTTP ${st})"
+                  [ "$st" = "200" ] || { echo "stale account removal failed (HTTP ${st})"; exit 1; }
+                done
+              }
+
+              upsert_user "VCAP Dev"     "vcap-dev@upayan.dev"     "${DEV_USER}"     "${DEV_PASSWORD}"
+              upsert_user "VCAP Staging" "vcap-staging@upayan.dev" "${STAGING_USER}" "${STAGING_PASSWORD}"
+
+              for pair in "vcap-dev@upayan.dev:${DEV_USER}" "vcap-staging@upayan.dev:${STAGING_USER}"; do
+                email=${pair%%:*}; login=${pair##*:}
+                prune_stale "$email" "$(lookup "$login" | jq -r '.id // empty')"
+              done
+
+              # --- public dashboards: removed ---
+              # SEC-007 / decision D-11 (owner, 2026-09-28). This job used to create and re-use
+              # access tokens for two public dashboards, which made them unauthenticated: the URL
+              # was the only credential, and the dashboards exposed vcap-dev/vcap-staging pod logs
+              # (a vcap-staging dataset is class A student data). The feature is now disabled on the
+              # Grafana Deployment (`GF_PUBLIC_DASHBOARDS_ENABLED=false`), so creating tokens here
+              # would only produce dangling rows that a future re-enable would silently revive.
+              # Log access for the VCAP team is the authenticated viewer accounts above, reached
+              # through Cloudflare Access (NET-004) as VCAP-010 specifies.
+              echo "public dashboards disabled (SEC-007/D-11) — viewer accounts provisioned above"
+          env:
+            - name: ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-user
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-password
+            - name: DEV_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-dev-credentials
+                  key: username
+            - name: DEV_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-dev-credentials
+                  key: password
+            - name: STAGING_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-staging-credentials
+                  key: username
+            - name: STAGING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-staging-credentials
+                  key: password

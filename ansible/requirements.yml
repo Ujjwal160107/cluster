@@ -1,0 +1,18 @@
+---
+# ANS-004: pinned, not lower-bounded. A `>=` bound means the collection that actually runs depends on
+# the day CI ran, so a playbook can pass in CI and fail on the host (or vice versa) with no change in
+# this repo — the same failure mode the k3s version pin exists to prevent. Bump these deliberately,
+# with the playbook re-validated against the host, and let Renovate (CI-005) propose the bumps once it
+# exists.
+#
+# Versions below are what was installed and working on 2026-09-28 (`ansible-galaxy collection list`).
+collections:
+  - name: ansible.posix
+    version: "2.2.2"
+  - name: community.general
+    version: "13.4.0"
+  # Needed since 2026-09-28: group_vars/vps/secrets.sops.yaml supplies the restic password via the
+  # collection's vars plugin (enabled in ansible.cfg). S5's SOPS/age tooling is live, so this is now
+  # the supported path rather than a future one.
+  - name: community.sops
+    version: "2.4.0"

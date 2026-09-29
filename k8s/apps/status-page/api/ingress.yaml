@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: status-page-ingress
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  # No `tls:` block: Traefik serves the *.upayan.dev default certificate (TLSStore `default` in
+  # kube-system, Cloudflare Origin CA) — see docs/adr/0004-origin-ca-tlsstore.md.
+  rules:
+    - host: status-page.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: status-page-app
+                port:
+                  number: 3000
+    - host: api-status-page.upayan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: status-page-api
+                port:
+                  number: 5000

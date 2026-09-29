@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: meghmitra
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    # P3-02: root must never be able to prune an Application — losing this object does not stop
+    # running pods, but it does stop the next sync and turns a routine reconcile into an
+    # investigation.
+
+    # P3-M4 (OD-4): the application is owned by `Ujjwal160107/adhigrahan-radar` — images, CI, and
+    # every workload object under `deploy/k8s/`. This Application is the tenant's registration in
+    # the cluster, not a copy of its config.
+    #
+    # `write-back-method: argocd` (no `git:secret`): the image-updater may not push to a repository
+    # this owner does not administer. With `argocd` it patches this Application's own
+    # `kustomize.images` instead, which needs no credential and no write to the tenant's `main`.
+    # That is the same method the legacy application used for the same reason.
+    argocd-image-updater.argoproj.io/write-back-method: argocd
+    argocd-image-updater.argoproj.io/image-list: "api=ghcr.io/ujjwal160107/adhigrahan-radar/api:edge,web=ghcr.io/ujjwal160107/adhigrahan-radar/web:edge"
+    argocd-image-updater.argoproj.io/api.update-strategy: digest
+    argocd-image-updater.argoproj.io/web.update-strategy: digest
+    # The tenant's own kustomization declares both `images[].name` entries at `:edge`, which is what
+    # the updater's kustomize override needs to have a name to match against.
+    argocd-image-updater.argoproj.io/api.kustomize.image-name: ghcr.io/ujjwal160107/adhigrahan-radar/api
+    argocd-image-updater.argoproj.io/web.kustomize.image-name: ghcr.io/ujjwal160107/adhigrahan-radar/web
+spec:
+  project: meghmitra
+  source:
+    repoURL: https://github.com/Ujjwal160107/adhigrahan-radar
+    targetRevision: main
+    path: deploy/k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: meghmitra
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # No CreateNamespace, and it could not work even if it were set: the `meghmitra` AppProject
+      # permits no cluster-scoped kinds, and ArgoCD treats the destination Namespace as a resource
+      # when this option is on (measured on v2.14.11 — see the P2-05 changelog entry). The Namespace
+      # is declared by the `storage` Application instead
+      # (`k8s/platform/storage/namespaces-tenants.yaml`), which also carries its Pod Security labels.
+      - ServerSideApply=true
+      - ApplyOutOfSyncOnly=true

@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - traefik-config.yaml
+  - tlsstore.yaml
+generators:
+  # The Cloudflare Origin CA wildcard, SOPS-encrypted -- see tlsstore.yaml.
+  - secret-generator.yaml

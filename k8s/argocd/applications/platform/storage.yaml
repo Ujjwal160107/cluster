@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: storage
+  namespace: argocd
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/upayanmazumder/vps
+    targetRevision: main
+    path: k8s/platform/storage
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # ServerSideApply, not a 3-way merge: ArgoCD becomes one field manager among several, so it
+      # cannot strip a field another controller owns — here, the PV controller's `claimRef`. With a
+      # merge apply, an adoption like this can clear `claimRef` and unbind a live volume.
+      - ServerSideApply=true

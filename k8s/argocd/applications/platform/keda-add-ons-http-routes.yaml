@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  name: keda-add-ons-http-routes
+  namespace: argocd
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/upayanmazumder/vps
+    targetRevision: main
+    path: k8s/platform/keda-add-ons-http-routes
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keda
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
