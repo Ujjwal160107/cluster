@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - ghcr.io/upayanmazumder/devjourney/learning-qwik=ghcr.io/upayanmazumder/devjourney/learning-qwik:latest@sha256:79b5e794fb45e2ca4cbc8a350f27175de766dfb28913ed191710c7888c4491b8
