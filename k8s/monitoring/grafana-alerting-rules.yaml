@@ -908,7 +908,7 @@ groups:
     labels:
       severity: critical
     annotations:
-      summary: 'No successful class-A backup (vcap-staging Postgres+MinIO, meghmitra Postgres) for over 45 minutes (three missed 15-minute runs); Check `systemctl status vps-backup-classA` and `journalctl -u vps-backup-classA` on the node.'
+      summary: 'No successful class-A backup (vcap-staging Postgres+MinIO) for over 45 minutes (three missed 15-minute runs); Check `systemctl status vps-backup-classA` and `journalctl -u vps-backup-classA` on the node.'
   - uid: vps-backup-classc-stale
     title: VPS backup (class C) has not succeeded in over 36 hours
     condition: C

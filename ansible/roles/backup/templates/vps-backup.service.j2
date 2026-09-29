@@ -1,5 +1,5 @@
 [Unit]
-Description=vps-backup class {{ backup_class }} ({{ backup_class == 'A' and '30-min, vcap-staging + meghmitra' or 'daily, best-effort' }})
+Description=vps-backup class {{ backup_class }} ({{ backup_class == 'A' and '30-min, vcap-staging' or 'daily, best-effort' }})
 After=k3s.service
 Wants=k3s.service
 

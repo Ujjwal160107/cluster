@@ -21,12 +21,25 @@
        # app's data dir is the postgres cluster, which the pg_dump target above covers logically)
   class: A
 
-- namespace: meghmitra
-  workload: meghmitra-postgres
-  engine: postgres
-  db_env_secret: meghmitra-postgres-env
-  class: A
+# meghmitra-postgres was removed here on 2026-09-29 (P3-M4 ran, P3-M6's repo half). The Deployment
+# was pruned when the application on those hostnames was replaced, so this target had been failing
+# every class-A run since ~21:35 — which is why `systemctl status vps-backup-classA` reported
+# `FAILED: meghmitra/meghmitra-postgres (postgres)` and the newest class-A snapshot was hours old.
+# A target whose workload does not exist does not merely back up nothing; it fails the whole run and
+# takes the datasets beside it out of coverage with it.
 
+# The replacement application on the same hostnames (Adhigrahan Radar, OD-4) keeps its SQLite store
+# at /srv/data/meghmitra-data — a *path* target, class C per OD-14. It is not a database server, so
+# there is nothing to dump logically; `sqlite:` takes a consistent copy of the one file that is being
+# written while restic reads it (the app appends an AuditLog row per request), which is the same
+# reason the grafana target below sets it. The audit log and watchlist are user-written and not
+# regenerable from the pipeline, which is why this is not class "none".
+- namespace: meghmitra
+  workload: meghmitra-api
+  engine: file
+  path: /srv/data/meghmitra-data
+  class: C
+  sqlite: vivaad.db
 - namespace: vcap-dev
   workload: vcap-backend-dev-postgres
   engine: postgres
