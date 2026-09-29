@@ -1354,3 +1354,134 @@ groups:
     annotations:
       summary: 'Pod {{ $labels.namespace }}/{{ $labels.pod }} cannot pull its image ({{ $labels.reason }}) for 10m — check the registry credentials and whether the image still exists.'
 
+
+  # --- N8 (P7): authentication-failure visibility ------------------------------------------------
+  #
+  # These two are the plan's N8 pair. They are log-based on purpose: an auth failure leaves no metric
+  # behind — the only record of "someone tried the superuser over the network and was refused" is the
+  # server's own log line, and the same is true of a password guessing run against ArgoCD.
+  #
+  # State of each, stated because a provisioned alert that has never fired is not evidence:
+  #   - `argocd-login-failures` was exercised end-to-end when it was added (a deliberately wrong
+  #     password against `argocd.upayan.dev`, then the query returned a value).
+  #   - `vcap-postgres-auth-failures` **cannot be exercised yet**: 15432/15433 are closed and the
+  #     tenant NetworkPolicy admits same-namespace traffic only, so no authentication is attempted at
+  #     all. It is authored so the coverage exists on the day P7-N7 opens the port, and it is inert
+  #     until then — which is the correct failure mode for an alert about a path that is not open.
+  - uid: vcap-postgres-auth-failures
+    title: VCAP Postgres authentication failures
+    condition: C
+    data:
+      - refId: A
+        relativeTimeRange:
+          from: 600
+          to: 0
+        datasourceUid: loki
+        model:
+          editorMode: code
+          expr: sum by (namespace) (count_over_time({namespace=~"vcap-.*",container="postgres"} |~ "password authentication failed|no pg_hba.conf entry|pg_hba.conf rejects" [10m]))
+          queryType: instant
+          refId: A
+      - refId: B
+        relativeTimeRange:
+          from: 600
+          to: 0
+        datasourceUid: __expr__
+        model:
+          type: reduce
+          expression: A
+          reducer: last
+          settings:
+            mode: dropNN
+          refId: B
+      - refId: C
+        relativeTimeRange:
+          from: 600
+          to: 0
+        datasourceUid: __expr__
+        model:
+          type: threshold
+          expression: B
+          conditions:
+            - evaluator:
+                type: gt
+                params:
+                  - 50
+              operator:
+                type: and
+              query:
+                params:
+                  - C
+              reducer:
+                type: last
+                params: []
+          refId: C
+    for: 10m
+    # `OK`, not `Alerting`: before P7-N7 there is no postgres traffic at all, so "no log lines" is the
+    # expected state and must not read as a failure. After the port opens, `NoData` would be the
+    # interesting signal — that change belongs with N7, not here.
+    noDataState: OK
+    execErrState: Error
+    labels:
+      # Alerting, not warning: on a public Postgres port this is either a misconfigured app or someone
+      # guessing credentials, and #N7's whole design assumes pg_hba is what stops them.
+      severity: critical
+    annotations:
+      summary: 'More than 50 Postgres authentication failures in 10m in vcap-{{ $labels.namespace }} — a client is misconfigured, or credentials are being guessed. Check `pg_hba` is still rejecting the superuser over the network (P2-08) and review the source addresses in the log.'
+  - uid: argocd-login-failures
+    title: ArgoCD login failures
+    condition: C
+    data:
+      - refId: A
+        relativeTimeRange:
+          from: 600
+          to: 0
+        datasourceUid: loki
+        model:
+          editorMode: code
+          expr: sum(count_over_time({namespace="argocd",container="argocd-server"} |= "Invalid username or password" [10m]))
+          queryType: instant
+          refId: A
+      - refId: B
+        relativeTimeRange:
+          from: 600
+          to: 0
+        datasourceUid: __expr__
+        model:
+          type: reduce
+          expression: A
+          reducer: last
+          settings:
+            mode: dropNN
+          refId: B
+      - refId: C
+        relativeTimeRange:
+          from: 600
+          to: 0
+        datasourceUid: __expr__
+        model:
+          type: threshold
+          expression: B
+          conditions:
+            - evaluator:
+                type: gt
+                params:
+                  - 10
+              operator:
+                type: and
+              query:
+                params:
+                  - C
+              reducer:
+                type: last
+                params: []
+          refId: C
+    for: 10m
+    noDataState: OK
+    execErrState: Error
+    labels:
+      # The ArgoCD UI is the cluster's control plane. Ten failed logins in ten minutes against a
+      # single admin account is worth waking someone for; one typo is not.
+      severity: warning
+    annotations:
+      summary: 'More than 10 failed ArgoCD logins in 10m — credential guessing against the cluster control plane. The admin account is `admin`, and Cloudflare Access (N3) should be in front of this host.'
